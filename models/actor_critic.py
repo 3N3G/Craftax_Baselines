@@ -254,3 +254,51 @@ class ActorCriticWithEmbedding(nn.Module):
         )
 
         return pi, jnp.squeeze(critic, axis=-1), actor_emb
+
+
+class ActorCriticConvImAug(nn.Module):
+    action_dim: Sequence[int]
+    layer_width: int
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, obs, z):
+        x = nn.Conv(features=32, kernel_size=(5, 5))(obs)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(3, 3), strides=(3, 3))
+        x = nn.Conv(features=32, kernel_size=(5, 5))(x)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(3, 3), strides=(3, 3))
+        x = nn.Conv(features=32, kernel_size=(5, 5))(x)
+        x = nn.relu(x)
+        x = nn.max_pool(x, window_shape=(3, 3), strides=(3, 3))
+
+        embedding = x.reshape(x.shape[0], -1)
+
+        combined_embedding = jnp.concatenate([embedding, z], axis=-1)
+
+        actor_mean = nn.Dense(
+            self.layer_width, kernel_init=orthogonal(2), bias_init=constant(0.0)
+        )(combined_embedding)
+        actor_mean = nn.relu(actor_mean)
+
+        actor_mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_mean)
+        actor_mean = nn.relu(actor_mean)
+
+        actor_mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_mean)
+
+        pi = distrax.Categorical(logits=actor_mean)
+
+        critic = nn.Dense(
+            self.layer_width, kernel_init=orthogonal(2), bias_init=constant(0.0)
+        )(combined_embedding)
+        critic = nn.relu(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            critic
+        )
+
+        return pi, jnp.squeeze(critic, axis=-1)
