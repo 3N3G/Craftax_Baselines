@@ -33,6 +33,31 @@ from wrappers import (
     AutoResetEnvWrapper,
 )
 
+from pathlib import Path
+import pickle
+
+
+def save_trajectory_batch(batch_data, batch_idx, save_path):
+    """Save a batch of trajectories to disk using numpy compressed format"""
+    save_path = Path(save_path)
+    save_path.mkdir(parents=True, exist_ok=True)
+
+    filepath = save_path / f"trajectories_batch_{batch_idx:06d}.npz"
+    np.savez_compressed(
+        filepath,
+        obs=batch_data["obs"],
+        next_obs=batch_data["next_obs"],
+        action=batch_data["action"],
+        reward=batch_data["reward"],
+        done=batch_data["done"],
+        log_prob=batch_data["log_prob"],
+    )
+
+    print(
+        f"Saved batch {batch_idx} ({len(batch_data['obs'])} transitions) to {filepath}"
+    )
+
+
 # Code adapted from the original implementation made by Chris Lu
 # Original code located at https://github.com/luchris429/purejaxrl
 
@@ -204,6 +229,7 @@ def make_train(config):
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
+
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 (
@@ -591,6 +617,34 @@ def make_train(config):
                     update_step,
                 )
 
+            if config["SAVE_TRAJ"]:
+
+                def save_callback(traj_batch, update_step):
+                    if update_step % config["SAVE_TRAJ_EVERY"] == 0:
+                        # Convert to numpy and reshape
+                        # traj_batch shape is (NUM_STEPS, NUM_ENVS, ...)
+                        # Reshape to (NUM_STEPS * NUM_ENVS, ...)
+                        batch_data = {
+                            "obs": np.array(traj_batch.obs).reshape(
+                                -1, *traj_batch.obs.shape[2:]
+                            ),
+                            "next_obs": np.array(traj_batch.next_obs).reshape(
+                                -1, *traj_batch.next_obs.shape[2:]
+                            ),
+                            "action": np.array(traj_batch.action).reshape(-1),
+                            "reward": np.array(traj_batch.reward).reshape(
+                                -1
+                            ),  # I'm assuming no intrisic reward, so reward_e = reward
+                            "done": np.array(traj_batch.done).reshape(-1),
+                            "log_prob": np.array(traj_batch.log_prob).reshape(-1),
+                        }
+
+                        save_trajectory_batch(
+                            batch_data, update_step, config["TRAJ_SAVE_PATH"]
+                        )
+
+                jax.debug.callback(save_callback, traj_batch, update_step)
+
             runner_state = (
                 train_state,
                 env_state,
@@ -633,6 +687,23 @@ def run_ppo(config):
         )
 
     rng = jax.random.PRNGKey(config["SEED"])
+
+    if config["USE_WANDB"]:
+        # Create env to get first frame
+        env = make_craftax_env_from_name(
+            config["ENV_NAME"], not config["USE_OPTIMISTIC_RESETS"]
+        )
+        env_params = env.default_params
+        test_rng = jax.random.PRNGKey(0)
+        obsv, _ = env.reset(test_rng, env_params)
+        first_frame = np.array(obsv)  # Now it's concrete, not a tracer
+        wandb.log(
+            {
+                "first_frame": wandb.Image(first_frame),
+                "frame_shape": str(first_frame.shape),
+            }
+        )
+
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
 
     train_jit = jax.jit(make_train(config))
@@ -667,7 +738,7 @@ def run_ppo(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1")
+    parser.add_argument("--env_name", type=str, default="Craftax-Pixels-v1")
     parser.add_argument(
         "--num_envs",
         type=int,
@@ -705,7 +776,13 @@ if __name__ == "__main__":
         "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
-
+    parser.add_argument("--save_traj", action="store_true")
+    parser.add_argument(
+        "--traj_save_path",
+        type=str,
+        default="/data/group_data/rl/craftax_unlabelled_new/",
+    )
+    parser.add_argument("--save_traj_every", type=int, default=1)
     # EXPLORATION
     parser.add_argument("--exploration_update_epochs", type=int, default=4)
     # ICM
