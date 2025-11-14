@@ -643,7 +643,7 @@ def make_train(config):
                             batch_data, update_step, config["TRAJ_SAVE_PATH"]
                         )
 
-                jax.debug.callback(save_callback, traj_batch, update_step)
+                jax.experimental.io_callback(save_callback, None, traj_batch, update_step)
 
             runner_state = (
                 train_state,

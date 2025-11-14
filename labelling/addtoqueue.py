@@ -11,7 +11,7 @@ RESULTS_DIR = "/data/group_data/rl/craftax_labelled_results/"
 
 
 # This assumes default localhost:6379, change if needed
-r = redis.Redis(decode_responses=True)
+r = redis.Redis(host='login2', port=6379, decode_responses=True)
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 file_paths = glob.glob(os.path.join(DATA_DIR, FILE_PATTERN))

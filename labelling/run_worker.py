@@ -12,17 +12,43 @@ from transformers import (
 from PIL import Image
 from transformers import Qwen3VLForConditionalGeneration
 import time
+import logging
+import socket
+import wandb
 
-QUEUE_NAME = "craftax_job_queue_5M"
+# gemini logging stuff
+LOGS_DIR = "/data/group_data/rl/craftax_job_logs/" # Make this directory
+os.makedirs(LOGS_DIR, exist_ok=True)
+pid = os.getpid()
+hostname = socket.gethostname()
+log_filename = os.path.join(LOGS_DIR, f"worker_{hostname}_{pid}.log")
+logger = logging.getLogger(f"worker_{pid}")
+logger.setLevel(logging.INFO)
+handler = logging.FileHandler(log_filename)
+handler.setLevel(logging.INFO)
 
-RESULTS_DIR = "/data/group_data/rl/craftax_labelled_results_5M/"
-print(f"Results will be saved in: {RESULTS_DIR}")
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+logger.addHandler(handler)
+# gemini logging stuff
+
+
+
+QUEUE_NAME = "craftax_job_queue"
+
+RESULTS_DIR = "/data/group_data/rl/craftax_labelled_results/"
+logger.info(f"Results will be saved in: {RESULTS_DIR}")
 os.makedirs(RESULTS_DIR, exist_ok=True)
+
+r = redis.Redis(host='login2', port=6379, decode_responses=True)
+r.ping()
 
 MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
 BATCH_SIZE = 32
+TOKENS_GENERATED = 256
 
-print("Initializing qweb3")
+logger.info("Initializing qwen3")
 # quantization_config = BitsAndBytesConfig(
 #     load_in_4bit=True,
 #     bnb_4bit_compute_type=torch.float16
@@ -39,11 +65,7 @@ model = Qwen3VLForConditionalGeneration.from_pretrained(
     trust_remote_code=True,
 )
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-print("Qwen3 initialized.")
-
-# Connect to Redis
-r = redis.Redis(decode_responses=True)
-r.ping()
+logger.info("Qwen3 initialized.")
 
 gamedesc = """Craftax is a game about exploring dungeons, mining, crafting and fighting enemies. The player can move in the four cardinal directions using WASD and can interact using SPACE. Interacting can cause the player to attempt to mine (a block), attack (a creature), drink (water or from a fountain), eat (fruit) or open a chest.
 
@@ -58,34 +80,7 @@ question = """
 
 
 def create_consolidated_prompt(obs):
-    """
-    This is your CRITICAL function. It must create the
-    *single prompt* that asks for all 5 labels.
-
-    For Qwen-VL, this function needs to return the
-    data structure that the tokenizer's `apply_chat_template`
-    or `prepare_inputs_for_generation` expects.
-
-    This is an abstraction!
-    """
-    # This is highly abstract. You must implement this based on
-    # Qwen-VL's documentation for multimodal inputs.
-
-    # 1. Process 'obs' and 'next_obs' into image data (e.g., PIL Image)
     img = Image.fromarray((obs * 255).astype(np.uint8))
-    # next_img = Image.fromarray((next_obs * 255).astype(np.uint8))
-
-    # Qwen-VL's format is a list of dicts
-    # You MUST return the data in the format your tokenizer needs.
-    # This is just a placeholder.
-    # query = [
-    #    {'type': 'image', 'content': image_1},
-    #    {'type': 'image', 'content': image_2},
-    #    {'type': 'text', 'content': prompt_text}
-    # ]
-    # return query
-
-    # For this example, I'll just return the text.
     msg = [
         {
             "role": "user",
@@ -101,17 +96,18 @@ def create_consolidated_prompt(obs):
 while True:
     file_path = r.rpop(QUEUE_NAME)
     if file_path is None:
-        print("No more jobs! Exiting.")
+        logger.info("No more jobs! Exiting.")
         break
 
-    print(f"Processing job: {file_path}")
-
+    logger.info(f"Processing job: {file_path}")
+    wandb.init(project="craftax_offline_qwen3vl4b_labelling", name="labelling" + file_path)
     try:
         data = np.load(file_path)
         num_samples = len(data["obs"])  # Should be 8192
         all_hidden_states = []
+        all_outputs = []
 
-        print(
+        logger.info(
             f"Beginning inference on {num_samples} samples in batches of {BATCH_SIZE}..."
         )
         start_time = time.time()
@@ -143,28 +139,34 @@ while True:
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=32,
+                    max_new_tokens=TOKENS_GENERATED,
                     output_hidden_states=True,
                     return_dict_in_generate=True,
                 )
+            
+            last_layer_states_list = [step_hidden_states[-1] for step_hidden_states in outputs.hidden_states]
+            generated_hidden_states = torch.cat(last_layer_states_list, dim=1)
+            seq_len = generated_hidden_states.shape[1]
+            indices = torch.arange(seq_len - 1, -1, -8, device=generated_hidden_states.device)
+            last_layer_hidden_state = generated_hidden_states[:, indices, :].cpu().numpy()
+            # last_layer_hidden_state = outputs.hidden_states[:, ::-8, -1] # should be (batch_size, TOKENS_GENERATED, hidden_size)
 
-            hidden_states_at_step_n = outputs.hidden_states[-1]
-            last_layer_hidden_states = hidden_states_at_step_n[-1]
-            final_token_hidden_states = last_layer_hidden_states[
-                :, -1, :
-            ]  # should be (batch_size, hidden_size)
-
-            all_hidden_states.append(final_token_hidden_states.cpu())
+            all_hidden_states.append(last_layer_hidden_state)
+            prompt_length = inputs['input_ids'].shape[1]
+            generated_token_ids = outputs.sequences[:, prompt_length:]
+            generated_text_list = processor.batch_decode(generated_token_ids, skip_special_tokens=True)
+            np_text = np.array(generated_text_list, dtype=object)
+            all_outputs.append(np_text)
 
             if (i // BATCH_SIZE) % 10 == 0:  # Log progress
-                print(
+                logger.info(
                     f"  ... processed batch {i // BATCH_SIZE} / {num_samples // BATCH_SIZE}"
                 )
 
         end_time = time.time()
-        print(f"Finished inference in {end_time - start_time:.2f}s of {file_path}")
-        combined_hidden_states_tensor = torch.cat(all_hidden_states, dim=0)
-        hidden_states_numpy = combined_hidden_states_tensor.numpy()
+        logger.info(f"Finished inference in {end_time - start_time:.2f}s of {file_path}")
+        hidden_states_numpy = np.concatenate(all_hidden_states, axis=0)
+        all_outputs_numpy = np.concatenate(all_outputs, axis=0)
 
         save_data = {  # idk if necessary to remake
             "obs": data["obs"],
@@ -174,18 +176,19 @@ while True:
             "done": data["done"],
             "log_prob": data["log_prob"],
             "hidden_state": hidden_states_numpy,
+            "text_generated": all_outputs_numpy
         }
 
         result_file_name = os.path.basename(file_path)
         result_path = os.path.join(RESULTS_DIR, result_file_name)
 
         # Save the new .npz file
-        print(f"  Saving augmented data to: {result_path}")
+        logger.info(f"  Saving augmented data to: {result_path}")
         np.savez_compressed(result_path, **save_data)
-        print(f"  Job {file_path} completed and saved.")
+        logger.info(f"  Job {file_path} completed and saved.")
 
     except Exception as e:
-        print(f"Failed to process {file_path}: {e}")
+        logger.info(f"Failed to process {file_path}: {e}", exc_info=True)
         # r.lpush(QUEUE_NAME, file_path) # gemini uncertain if this is needed
 
-print("Worker finished.")
+logger.info("Worker finished.")
