@@ -15,9 +15,25 @@ import time
 import logging
 import socket
 import wandb
+import argparse
+
+parser = argparse.ArgumentParser(description="Worker for Craftax")
+parser.add_argument(
+    "--name",
+    type=str,
+    required=True,
+    help="Name of the subdirectory to look in (e.g., 'gene', 'max', or 'vansh')",
+)
+parser.add_argument(
+    "--host", type=str, required=True, help="Which login node are you on? (e.g. login2)"
+)
+parser.add_argument(
+    "--port", type=int, required=True, help="Port number of the Redis server"
+)
+args = parser.parse_args()
 
 # gemini logging stuff
-LOGS_DIR = "/data/group_data/rl/craftax_job_logs/" # Make this directory
+LOGS_DIR = "/data/group_data/rl/craftax_job_logs/"  # Make this directory
 os.makedirs(LOGS_DIR, exist_ok=True)
 pid = os.getpid()
 hostname = socket.gethostname()
@@ -27,21 +43,20 @@ logger.setLevel(logging.INFO)
 handler = logging.FileHandler(log_filename)
 handler.setLevel(logging.INFO)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 
 logger.addHandler(handler)
 # gemini logging stuff
 
 
-
 QUEUE_NAME = "craftax_job_queue"
 
-RESULTS_DIR = "/data/group_data/rl/craftax_labelled_results/"
+RESULTS_DIR = f"/data/group_data/rl/craftax_labelled_results/{args.name}/"
 logger.info(f"Results will be saved in: {RESULTS_DIR}")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-r = redis.Redis(host='login2', port=6379, decode_responses=True)
+r = redis.Redis(host=args.host, port=args.port, decode_responses=True)
 r.ping()
 
 MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
@@ -100,7 +115,9 @@ while True:
         break
 
     logger.info(f"Processing job: {file_path}")
-    wandb.init(project="craftax_offline_qwen3vl4b_labelling", name="labelling" + file_path)
+    wandb.init(
+        project="craftax_offline_qwen3vl4b_labelling", name="labelling" + file_path
+    )
     try:
         data = np.load(file_path)
         num_samples = len(data["obs"])  # Should be 8192
@@ -143,18 +160,26 @@ while True:
                     output_hidden_states=True,
                     return_dict_in_generate=True,
                 )
-            
-            last_layer_states_list = [step_hidden_states[-1] for step_hidden_states in outputs.hidden_states]
+
+            last_layer_states_list = [
+                step_hidden_states[-1] for step_hidden_states in outputs.hidden_states
+            ]
             generated_hidden_states = torch.cat(last_layer_states_list, dim=1)
             seq_len = generated_hidden_states.shape[1]
-            indices = torch.arange(seq_len - 1, -1, -8, device=generated_hidden_states.device)
-            last_layer_hidden_state = generated_hidden_states[:, indices, :].cpu().numpy()
+            indices = torch.arange(
+                seq_len - 1, -1, -8, device=generated_hidden_states.device
+            )
+            last_layer_hidden_state = (
+                generated_hidden_states[:, indices, :].cpu().numpy()
+            )
             # last_layer_hidden_state = outputs.hidden_states[:, ::-8, -1] # should be (batch_size, TOKENS_GENERATED, hidden_size)
 
             all_hidden_states.append(last_layer_hidden_state)
-            prompt_length = inputs['input_ids'].shape[1]
+            prompt_length = inputs["input_ids"].shape[1]
             generated_token_ids = outputs.sequences[:, prompt_length:]
-            generated_text_list = processor.batch_decode(generated_token_ids, skip_special_tokens=True)
+            generated_text_list = processor.batch_decode(
+                generated_token_ids, skip_special_tokens=True
+            )
             np_text = np.array(generated_text_list, dtype=object)
             all_outputs.append(np_text)
 
@@ -164,7 +189,9 @@ while True:
                 )
 
         end_time = time.time()
-        logger.info(f"Finished inference in {end_time - start_time:.2f}s of {file_path}")
+        logger.info(
+            f"Finished inference in {end_time - start_time:.2f}s of {file_path}"
+        )
         hidden_states_numpy = np.concatenate(all_hidden_states, axis=0)
         all_outputs_numpy = np.concatenate(all_outputs, axis=0)
 
@@ -176,7 +203,7 @@ while True:
             "done": data["done"],
             "log_prob": data["log_prob"],
             "hidden_state": hidden_states_numpy,
-            "text_generated": all_outputs_numpy
+            "text_generated": all_outputs_numpy,
         }
 
         result_file_name = os.path.basename(file_path)

@@ -4,42 +4,40 @@ import os
 import argparse
 import sys
 
+
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Push Craftax trajectory files to a Redis queue.")
+    parser = argparse.ArgumentParser(
+        description="Push Craftax trajectory files to a Redis queue."
+    )
 
     parser.add_argument(
-        "--name", 
-        type=str, 
-        required=True, 
-        help="Name of the subdirectory to look in (e.g., 'gene', 'max', or 'vansh')"
+        "--name",
+        type=str,
+        required=True,
+        help="Name of the subdirectory to look in (e.g., 'gene', 'max', or 'vansh')",
     )
 
     # Redis Connection flags
     parser.add_argument(
-        "--host", 
-        type=str, 
-        default="login2", 
-        help="Which login node are you on?"
+        "--host",
+        type=str,
+        required=True,
+        help="Which login node are you on? (e.g. login2)",
     )
     parser.add_argument(
-        "--port", 
-        type=int, 
-        default=6379, 
-        help="Redis port (default: 6379)"
+        "--port", type=int, default=6379, help="Redis port (default: 6379)"
     )
     parser.add_argument(
-        "--queue", 
-        type=str, 
-        default="craftax_job_queue", 
-        help="Name of the Redis queue"
+        "--queue", type=str, default="craftax_job_queue", help="Name of the Redis queue"
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print found files without pushing to Redis"
+        help="Print found files without pushing to Redis",
     )
 
     return parser.parse_args()
+
 
 def main():
     args = parse_arguments()
@@ -67,21 +65,24 @@ def main():
     file_paths.sort()
 
     total_found = len(file_paths)
-    
+
     if total_found == 0:
         print("No files found matching the pattern.")
         sys.exit(0)
-    
+
     print(f"Found {total_found} files. ")
 
     if args.dry_run:
-        print("Dry run enabled. No jobs pushed. Example file:", file_paths[0] if file_paths else "None")
+        print(
+            "Dry run enabled. No jobs pushed. Example file:",
+            file_paths[0] if file_paths else "None",
+        )
         return
 
     # Redis Connection
     try:
         r = redis.Redis(host=args.host, port=args.port, decode_responses=True)
-        r.ping() # Test connection
+        r.ping()  # Test connection
         print(f"Connected to Redis at {args.host}:{args.port}")
     except redis.ConnectionError as e:
         print(f"Error connecting to Redis: {e}")
@@ -89,7 +90,7 @@ def main():
 
     # Push to Queue
     print(f"Pushing jobs to queue: '{args.queue}'...")
-    
+
     try:
         with r.pipeline() as pipe:
             for path in file_paths:
@@ -99,6 +100,7 @@ def main():
     except Exception as e:
         print(f"An error occurred while pushing to Redis: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

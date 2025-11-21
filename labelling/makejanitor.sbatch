@@ -19,4 +19,4 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate "test"
 cd /home/geney/Craftax_Baselines/labelling
 
-srun --cpu-bind=none python janitor.py
+srun --cpu-bind=none python janitor.py --name gene --host login2 --port 6230
