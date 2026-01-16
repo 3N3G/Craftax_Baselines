@@ -23,4 +23,4 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate "test"
 cd /home/geney/Craftax_Baselines/labelling
 
-srun --cpu-bind=none python run_worker.py --name gene --host login2 --port 6230
+srun --cpu-bind=none python run_worker.py --name vansh --host login3 --port 1111 

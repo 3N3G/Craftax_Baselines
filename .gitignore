@@ -2,6 +2,9 @@ tmp/
 wandb/
 res/
 runs/
+logs/
+eval_videos*/
+core.*
 
 play_data
 

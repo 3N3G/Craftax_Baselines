@@ -33,7 +33,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 # gemini logging stuff
-LOGS_DIR = "/data/group_data/rl/craftax_job_logs/"  # Make this directory
+LOGS_DIR = "/data/group_data/rl/geney/craftax_job_logs/"  # Make this directory
 os.makedirs(LOGS_DIR, exist_ok=True)
 pid = os.getpid()
 hostname = socket.gethostname()
@@ -52,7 +52,7 @@ logger.addHandler(handler)
 
 QUEUE_NAME = "craftax_job_queue"
 
-RESULTS_DIR = f"/data/group_data/rl/craftax_labelled_results/{args.name}/"
+RESULTS_DIR = f"/data/group_data/rl/geney/craftax_labelled_results/{args.name}/"
 logger.info(f"Results will be saved in: {RESULTS_DIR}")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 

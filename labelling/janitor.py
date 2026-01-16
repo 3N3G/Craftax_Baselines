@@ -21,8 +21,8 @@ args = parser.parse_args()
 
 # --- Configuration ---
 QUEUE_NAME = "craftax_job_queue"
-UNLABELLED_DIR = f"/data/group_data/rl/craftax_unlabelled_new/{args.name}/"
-RESULTS_DIR = "/data/group_data/rl/craftax_labelled_results/"
+UNLABELLED_DIR = f"/data/group_data/rl/geney/craftax_unlabelled_new/{args.name}/"
+RESULTS_DIR = f"/data/group_data/rl/geney/craftax_labelled_results/{args.name}/"
 SLEEP_INTERVAL = 300  # 5 minutes
 
 # --- Logging ---

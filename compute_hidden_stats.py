@@ -1,117 +1,88 @@
-"""
-Compute normalization statistics for hidden states from training data
-"""
+import torch
 import numpy as np
 import glob
-import argparse
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
-def compute_stats(data_dir, output_path, num_files=None):
+
+def load_file(filepath):
     """
-    Compute mean and std of hidden states from training data
-
-    Args:
-        data_dir: Directory containing trajectories_batch_*.npz files
-        output_path: Where to save hidden_state_stats.npz
-        num_files: Number of files to use (None = all files)
+    CPU-ONLY worker. Do NOT initialize torch or cuda here.
     """
-    print(f"Searching for training data in: {data_dir}")
+    try:
+        # np.load is CPU-bound (decompression)
+        with np.load(filepath) as data:
+            if "hidden_state" not in data:
+                return None
+            raw = data["hidden_state"]
+            # Mean pool if (N, S, D) -> (N, D)
+            return raw.mean(axis=1) if raw.ndim == 3 else raw
+    except Exception:
+        return None
 
-    search_pattern = str(Path(data_dir) / "trajectories_batch_*.npz")
-    files = sorted(glob.glob(search_pattern))
 
-    if not files:
-        raise ValueError(f"No training files found matching: {search_pattern}")
-
-    print(f"Found {len(files)} files")
-
-    if num_files is not None:
+def compute_all_stats(data_dir, output_path, num_files=None):
+    files = sorted(glob.glob(str(Path(data_dir) / "trajectories_batch_*.npz")))
+    if num_files:
         files = files[:num_files]
-        print(f"Using first {num_files} files")
 
-    # Collect hidden states
-    all_hidden_states = []
+    print(f"Found {len(files)} files. Initializing GPU...")
 
-    for i, filepath in enumerate(files):
-        print(f"Loading {i+1}/{len(files)}: {Path(filepath).name}")
-        try:
-            with np.load(filepath) as data:
-                if 'hidden_state' not in data:
-                    print(f"  Warning: 'hidden_state' not found in {filepath}, skipping")
-                    continue
+    # Initialize CUDA ONLY in the main process
+    device = torch.device("cuda")
 
-                raw_hidden = data['hidden_state']  # Expected shape: (N, 80, 2560) or (N, 2560)
+    sum_x = None
+    sum_x2 = None
+    sum_l2 = 0.0
+    total_samples = 0
 
-                # Mean pool if needed
-                if raw_hidden.ndim == 3:
-                    pooled_hidden = np.mean(raw_hidden, axis=1)  # (N, 2560)
-                else:
-                    pooled_hidden = raw_hidden
+    # Use imap to stream data from CPU workers to GPU
+    # Setting chunksize helps efficiency with many small files
+    with Pool(cpu_count()) as pool:
+        iterator = pool.imap_unordered(load_file, files, chunksize=4)
 
-                all_hidden_states.append(pooled_hidden)
-                print(f"  Loaded {pooled_hidden.shape[0]} samples")
+        for arr in tqdm(iterator, total=len(files), desc="Computing Stats"):
+            if arr is None:
+                continue
 
-        except Exception as e:
-            print(f"  Error loading {filepath}: {e}")
-            continue
+            # Move to GPU for math
+            batch_data = torch.from_numpy(arr).to(device, dtype=torch.float32)
 
-    if not all_hidden_states:
-        raise ValueError("No hidden states successfully loaded!")
+            if sum_x is None:
+                dim = batch_data.shape[1]
+                sum_x = torch.zeros(dim, device=device)
+                sum_x2 = torch.zeros(dim, device=device)
 
-    # Concatenate and compute statistics
-    print("\nComputing statistics...")
-    all_hidden = np.concatenate(all_hidden_states, axis=0)
-    print(f"Total samples: {all_hidden.shape[0]}")
-    print(f"Hidden state dimension: {all_hidden.shape[1]}")
+            # High-speed GPU reductions
+            sum_x += batch_data.sum(dim=0)
+            sum_x2 += (batch_data**2).sum(dim=0)
+            sum_l2 += torch.norm(batch_data, p=2, dim=1).sum().item()
+            total_samples += batch_data.size(0)
 
-    hidden_mean = np.mean(all_hidden, axis=0)
-    hidden_std = np.std(all_hidden, axis=0)
-
-    # Prevent division by zero
-    hidden_std = np.where(hidden_std < 1e-6, 1.0, hidden_std)
-
-    print(f"\nStatistics:")
-    print(f"  Mean - min: {hidden_mean.min():.6f}, max: {hidden_mean.max():.6f}, avg: {hidden_mean.mean():.6f}")
-    print(f"  Std  - min: {hidden_std.min():.6f}, max: {hidden_std.max():.6f}, avg: {hidden_std.mean():.6f}")
+    # Final calculations on GPU
+    mean = sum_x / total_samples
+    var = (sum_x2 / total_samples) - (mean**2)
+    std = torch.sqrt(torch.clamp(var, min=1e-8))
+    avg_l2_norm = sum_l2 / total_samples
 
     # Save
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     np.savez(
         output_path,
-        mean=hidden_mean,
-        std=hidden_std,
-        num_samples=all_hidden.shape[0],
-        num_files=len(files)
+        mean=mean.cpu().numpy(),
+        std=std.cpu().numpy(),
+        # Wrap scalars in np.array
+        avg_l2_norm=np.array(avg_l2_norm),
+        total_samples=np.array(total_samples),
     )
 
-    print(f"\n✓ Saved to: {output_path}")
-    print(f"  Shape: mean={hidden_mean.shape}, std={hidden_std.shape}")
+    print(f"\nSuccess! Total Samples: {total_samples}")
+    print(f"Avg L2 Norm: {avg_l2_norm:.4f}")
 
-def main():
-    parser = argparse.ArgumentParser(description="Compute hidden state normalization statistics")
-    parser.add_argument(
-        '--data_dir',
-        type=str,
-        default='/data/group_data/rl/geney/craftax_labelled_results_with_returns',
-        help='Directory containing training data'
-    )
-    parser.add_argument(
-        '--output',
-        type=str,
-        default='/data/group_data/rl/geney/checkpoints/awr_augmented/hidden_state_stats.npz',
-        help='Output path for stats file'
-    )
-    parser.add_argument(
-        '--num_files',
-        type=int,
-        default=None,
-        help='Number of files to use (default: all files)'
-    )
-
-    args = parser.parse_args()
-    compute_stats(args.data_dir, args.output, args.num_files)
 
 if __name__ == "__main__":
-    main()
+    DATA_DIR = "/data/group_data/rl/geney/craftax_labelled_results_with_returns"
+    OUT_PATH = (
+        "/data/group_data/rl/geney/checkpoints/awr_augmented/hidden_state_stats.npz"
+    )
+    compute_all_stats(DATA_DIR, OUT_PATH)
