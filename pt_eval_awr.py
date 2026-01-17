@@ -25,63 +25,87 @@ def load_model(checkpoint_path, device):
     return model
 
 
-def draw_value_bar(frame, value, v_min=-1.0, v_max=10.0):
+def draw_dual_value_bar(frame, pred_val, true_val, v_min=-1.0, v_max=10.0):
     """
-    Draws a health-bar style indicator for the Value function
-    as pixels BELOW the current scene (extending the frame height).
+    Draws TWO bars in the footer:
+    1. Top: Predicted Value (V)
+    2. Bottom: Empirical Return (G)
     """
     # Ensure frame is contiguous numpy array for cv2
     frame = np.ascontiguousarray(frame)
     h, w, c = frame.shape
 
-    # Define footer height (pixels to add below)
-    footer_h = 30
+    # Define footer height (increased to fit two bars)
+    footer_h = 50
     new_h = h + footer_h
 
     # Create new frame with extra height (initialized to black/dark background)
     new_frame = np.zeros((new_h, w, c), dtype=frame.dtype)
-
+    
     # Copy the original scene onto the top of the new frame
     new_frame[0:h, 0:w] = frame
 
-    # Bar Configuration
-    bar_h = 10
-    bar_w = w - 20
-    x_start = 10
-
-    # Position elements in the new footer area (below original h)
-    y_start = h + 15  # Bar top
-    text_y = h + 10  # Text baseline
-
-    # Normalize value for bar width
-    # Clamp value between min and max for visualization
-    clamped_val = max(v_min, min(v_max, value))
-    ratio = (clamped_val - v_min) / (v_max - v_min)
-    fill_w = int(ratio * bar_w)
-
-    # Colors (BGR for OpenCV)
+    # --- Shared Config ---
+    bar_w = w - 60  # Width of the bar area
+    x_start = 55    # Indent to make room for labels
     bg_color = (50, 50, 50)
-    fill_color = (0, 255, 0) if value > 0 else (0, 0, 255)
     text_color = (255, 255, 255)
-
-    # Draw Background for the bar
-    cv2.rectangle(
-        new_frame, (x_start, y_start), (x_start + bar_w, y_start + bar_h), bg_color, -1
-    )
-    # Draw Fill
-    if fill_w > 0:
+    
+    # Helper to draw a single bar
+    def draw_single_bar(y_pos, val, label, color_pos, color_neg):
+        # Draw Label
+        cv2.putText(
+            new_frame, label, (5, y_pos + 8), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.35, text_color, 1
+        )
+        
+        # Draw Bar Background
         cv2.rectangle(
-            new_frame,
-            (x_start, y_start),
-            (x_start + fill_w, y_start + bar_h),
-            fill_color,
-            -1,
+            new_frame, (x_start, y_pos), (x_start + bar_w, y_pos + 10), bg_color, -1
+        )
+        
+        # Calculate Fill
+        clamped_val = max(v_min, min(v_max, val))
+        ratio = (clamped_val - v_min) / (v_max - v_min)
+        fill_w = int(ratio * bar_w)
+        
+        # Determine Color
+        c = color_pos if val > 0 else color_neg
+        
+        # Draw Fill
+        if fill_w > 0:
+            cv2.rectangle(
+                new_frame,
+                (x_start, y_pos),
+                (x_start + fill_w, y_pos + 10),
+                c,
+                -1,
+            )
+        
+        # Draw Numeric Text
+        cv2.putText(
+            new_frame, f"{val:.2f}", (x_start + bar_w + 5, y_pos + 8), 
+            cv2.FONT_HERSHEY_SIMPLEX, 0.35, text_color, 1
         )
 
-    # Draw Text Value
-    text = f"V: {value:.3f}"
-    cv2.putText(
-        new_frame, text, (x_start, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1
+    # --- Draw Predicted Value (Top Bar) ---
+    # Green for positive, Red for negative
+    draw_single_bar(
+        y_pos=h + 10, 
+        val=pred_val, 
+        label="Pred V", 
+        color_pos=(0, 255, 0), 
+        color_neg=(0, 0, 255)
+    )
+
+    # --- Draw Empirical Return (Bottom Bar) ---
+    # Cyan for positive, Magenta for negative (to distinguish from V)
+    draw_single_bar(
+        y_pos=h + 30, 
+        val=true_val, 
+        label="True G", 
+        color_pos=(255, 255, 0), # Cyan (BGR)
+        color_neg=(255, 0, 255)  # Magenta (BGR)
     )
 
     return new_frame
@@ -105,8 +129,7 @@ def run_eval(args):
     model = load_model(args.checkpoint, args.device)
 
     total_rewards = []
-    video_frames = []
-
+    
     print(f"Starting evaluation for {args.num_episodes} episodes...")
 
     for ep in range(args.num_episodes):
@@ -115,17 +138,20 @@ def run_eval(args):
 
         done = False
         ep_reward = 0
-        ep_frames = []
-        ep_values = []  # Store V(s) for this episode
         step_count = 0
 
+        # --- Buffers for Two-Pass Rendering ---
+        raw_frames_buffer = [] # Store raw images here
+        ep_values = []         # Store V(s)
+        ep_rewards = []        # Store r
+        
         while not done:
             # 1. Handle Observation Conversion
             obs_np = np.array(obs)
 
-            # Convert to proper formats using helpers
+            # Convert to proper formats
             frame_raw = obs_to_255_range(obs_np)  # For video (uint8 0-255)
-            obs_01 = obs_to_01_range(obs_np)  # For model (float 0-1)
+            obs_01 = obs_to_01_range(obs_np)      # For model (float 0-1)
 
             obs_tensor = torch.from_numpy(obs_01).float().to(args.device).unsqueeze(0)
 
@@ -136,16 +162,9 @@ def run_eval(args):
                 action = action_tensor.item()
                 value_scalar = v_tensor.item()
 
-            # Track V
+            # 3. Buffer Data (Do NOT draw yet)
             ep_values.append(value_scalar)
-
-            # 3. Draw Video Frame
-            # if ep == 0:
-            # Draw the Value Bar on the frame
-            frame_with_overlay = draw_value_bar(
-                frame_raw.copy(), value_scalar, v_min=args.v_min, v_max=args.v_max
-            )
-            ep_frames.append(frame_with_overlay)
+            raw_frames_buffer.append(frame_raw)
 
             # 4. Step Env
             rng, step_key = jax.random.split(rng)
@@ -153,6 +172,7 @@ def run_eval(args):
                 step_key, env_state, action, env_params
             )
 
+            ep_rewards.append(float(reward))
             ep_reward += float(reward)
             step_count += 1
 
@@ -164,21 +184,51 @@ def run_eval(args):
             f"Episode {ep+1}: Reward = {ep_reward:.2f} (Steps: {step_count}, Mean V: {np.mean(ep_values):.3f})"
         )
 
-        # LOGGING: Average V over time for this trajectory
-        # Create a custom x-axis plot for this episode
-        data = [[x, y] for (x, y) in zip(range(len(ep_values)), ep_values)]
-        table = wandb.Table(data=data, columns=["step", "value"])
+        # --- POST-PROCESSING: Calculate Returns ---
+        # Calculate Discounted Return to Go (G_t)
+        gamma = 0.99
+        returns_to_go = []
+        G = 0
+        for r in reversed(ep_rewards):
+            G = r + gamma * G
+            returns_to_go.insert(0, G)
+
+        # --- POST-PROCESSING: Generate Video ---
+        # Now we have both V(s) and G_t, we can draw the frames
+        ep_frames_with_overlay = []
+        
+        # Determine loop length (handles rare off-by-one edge cases in buffers)
+        loop_len = min(len(raw_frames_buffer), len(ep_values), len(returns_to_go))
+        
+        for i in range(loop_len):
+            frame_overlay = draw_dual_value_bar(
+                frame=raw_frames_buffer[i],
+                pred_val=ep_values[i],
+                true_val=returns_to_go[i],
+                v_min=args.v_min,
+                v_max=args.v_max
+            )
+            ep_frames_with_overlay.append(frame_overlay)
+
+        # --- LOGGING: WandB ---
+        # 1. Plot Line Series (Overlay V vs Return)
+        steps_axis = [i for i in range(loop_len)]
         wandb.log(
             {
-                f"eval/episode_{ep}_value_curve": wandb.plot.line(
-                    table, "step", "value", title=f"Ep {ep} Value over Time"
+                f"eval/episode_{ep}_value_curve": wandb.plot.line_series(
+                    xs=[steps_axis, steps_axis],
+                    ys=[ep_values[:loop_len], returns_to_go[:loop_len]],
+                    keys=["Predicted Value", "Empirical Return"],
+                    title=f"Ep {ep} Value vs Return",
+                    xname="step"
                 )
             }
         )
 
-        if len(ep_frames) > 0:
+        # 2. Upload Video
+        if len(ep_frames_with_overlay) > 0:
             print("Processing video...")
-            video_array = np.array(ep_frames)  # (T, H, W, C)
+            video_array = np.array(ep_frames_with_overlay)  # (T, H, W, C)
             video_array = np.transpose(video_array, (0, 3, 1, 2))  # (T, C, H, W)
             wandb.log(
                 {

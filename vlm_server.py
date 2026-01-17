@@ -17,10 +17,8 @@ from image_utils import obs_to_pil_image, get_obs_stats
 
 # VLM Configuration
 MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
-# Must match training data generation (labelling/run_worker.py)
-# Training generates 256 tokens, concats prompt+generated hidden states,
-# then subsamples every 8 from end. With ~380 prompt tokens: (380+256)/8 ≈ 80 tokens
 TOKENS_GENERATED = 256
+ONLY_GENERATION = False # Whether to take the last 32 tokens instead of all 80 (includes the prompt)
 
 gamedesc = """Craftax is a game about exploring dungeons, mining, crafting and fighting enemies. The player can move in the four cardinal directions using WASD and can interact using SPACE. Interacting can cause the player to attempt to mine (a block), attack (a creature), drink (water or from a fountain), eat (fruit) or open a chest.
 
@@ -109,11 +107,7 @@ def get_hidden_state():
         data = request.get_json()
 
         # Handle base64 image or numpy array
-        if "obs_base64" in data:
-            img_bytes = base64.b64decode(data["obs_base64"])
-            img_pil = Image.open(io.BytesIO(img_bytes))
-            obs_np = None
-        elif "obs" in data:
+        if "obs" in data:
             # Assume obs is a list representing numpy array
             obs_np = np.array(data["obs"], dtype=np.float32)
 
@@ -130,7 +124,7 @@ def get_hidden_state():
             # Use image helper to convert to PIL Image
             img_pil = obs_to_pil_image(obs_np)
         else:
-            return jsonify({"error": "Missing obs or obs_base64"}), 400
+            return jsonify({"error": "Missing obs"}), 400
 
         # DEBUG: Save first query
         if DEBUG_MODE and current_request_id <= 3:
@@ -185,6 +179,10 @@ def get_hidden_state():
                 return_dict_in_generate=True,
             )
 
+        input_len = inputs.input_ids.shape[1]
+        generated_ids = outputs.sequences[0, input_len:]
+        generated_text = processor.decode(generated_ids, skip_special_tokens=True)
+
         # Extract hidden states (last layer, subsample every 8 tokens)
         last_layer_states_list = [
             step_hidden_states[-1] for step_hidden_states in outputs.hidden_states
@@ -198,11 +196,15 @@ def get_hidden_state():
                 f"[DIAG] Request {current_request_id}: seq_len={seq_len}, "
                 f"num_hidden_state_steps={len(outputs.hidden_states)}, "
                 f"generated_hidden_states.shape={generated_hidden_states.shape}"
+                f"generated_text={generated_text}"
             )
 
         indices = torch.arange(
             seq_len - 1, -1, -8, device=generated_hidden_states.device
         )
+        if ONLY_GENERATION:
+            indices = indices[:32]
+
         last_layer_hidden_state = generated_hidden_states[:, indices, :]
 
         # DIAGNOSTIC: Log subsampled shape (training data has 80 tokens)
@@ -248,7 +250,7 @@ def get_hidden_state():
                 )
                 np.savez(hidden_path, hidden_state=hidden_np, stats=hidden_stats)
 
-        response_data = {"hidden_state": hidden_list, "shape": list(hidden_np.shape)}
+        response_data = {"hidden_state": hidden_list, "shape": list(hidden_np.shape), "generated_text": generated_text}
 
         if DEBUG_MODE:
             response_data["stats"] = hidden_stats

@@ -62,6 +62,7 @@ def get_hidden_state_from_server(server_url, obs_np, debug=False):
 
     data = response.json()
     hidden_state = np.array(data["hidden_state"], dtype=np.float32)
+    generated_text = data.get("generated_text", "NO TEXT RETURNED SOMEHOW")
 
     if debug and "stats" in data:
         print(
@@ -71,7 +72,7 @@ def get_hidden_state_from_server(server_url, obs_np, debug=False):
             f"                 Min: {data['stats']['min']:.4f}, Max: {data['stats']['max']:.4f}"
         )
 
-    return hidden_state
+    return hidden_state, generated_text
 
 
 def load_model(checkpoint_path, device):
@@ -105,92 +106,127 @@ def load_normalization_stats(stats_path):
     return hidden_mean, hidden_std
 
 
-def draw_dual_line_graph(frame, values, rtgs, v_min=-1.0, v_max=10.0):
-    """
-    Draw dual line graph showing Value and Return-to-Go
+def wrap_text(text, font, font_scale, thickness, max_width):
+    """Helper to wrap text into multiple lines"""
+    if not text:
+        return []
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        # Try adding word to current line
+        test_line = ' '.join(current_line + [word])
+        (w, _), _ = cv2.getTextSize(test_line, font, font_scale, thickness)
+        
+        if w <= max_width:
+            current_line.append(word)
+        else:
+            # Line full, push it and start new one
+            lines.append(' '.join(current_line))
+            current_line = [word]
+            
+    if current_line:
+        lines.append(' '.join(current_line))
+    return lines
 
-    Args:
-        frame: Image frame (H, W, C)
-        values: List of value predictions
-        rtgs: List of return-to-go values (if available, else None)
-        v_min, v_max: Range for visualization
-
-    Returns:
-        Frame with graph overlay
+def draw_dual_line_graph(frame, values, rtgs, text=None, v_min=-1.0, v_max=10.0):
     """
-    frame = np.ascontiguousarray(frame)
+    Draw dual line graph AND generated text with FIXED dimensions.
+    Resizes frame to width 600.
+    Adds a fixed 450px footer for graph + text to ensure consistent video size.
+    """
+    # 1. Resize frame for visualization (so text is readable)
+    target_w = 600
     h, w, c = frame.shape
-
-    # Add footer space
-    footer_h = 60
-    new_h = h + footer_h
-    new_frame = np.zeros((new_h, w, c), dtype=frame.dtype)
-    new_frame[0:h, 0:w] = frame
-
-    if len(values) < 2:
-        return new_frame
-
-    # Graph dimensions
-    graph_h = 40
-    graph_w = w - 20
+    scale = target_w / w
+    target_h = int(h * scale)
+    
+    # 2. Define Fixed Footer Size (Graph + Text area)
+    # This prevents the "inhomogeneous shape" error
+    FOOTER_H = 450 
+    
+    # Graph Configuration
+    graph_h = 60
+    
+    # Text Configuration
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.45
+    thickness = 1
+    line_spacing = 20
+    text_padding = 10
+    
+    # Create Canvas of Fixed Size
+    total_h = target_h + FOOTER_H
+    canvas = np.zeros((total_h, target_w, c), dtype=frame.dtype)
+    
+    # Draw Game Frame
+    canvas[0:target_h, 0:target_w] = viz_frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+    
+    # --- Draw Graph (at top of footer) ---
+    graph_y_start = target_h + 10
+    graph_w = target_w - 20
     x_start = 10
-    y_start = h + 15
-
-    # Draw background
+    
+    # Background for graph
     cv2.rectangle(
-        new_frame,
-        (x_start, y_start),
-        (x_start + graph_w, y_start + graph_h),
+        canvas,
+        (x_start, graph_y_start),
+        (x_start + graph_w, graph_y_start + graph_h - 10),
         (30, 30, 30),
         -1,
     )
-
-    # Normalize values to graph coordinates
+    
     def value_to_y(val):
         clamped = max(v_min, min(v_max, val))
         ratio = (clamped - v_min) / (v_max - v_min)
-        return int(y_start + graph_h - ratio * graph_h)
+        # Invert Y (0 is top)
+        return int((graph_y_start + graph_h - 10) - ratio * (graph_h - 20))
 
     # Draw Value line (green)
-    for i in range(len(values) - 1):
-        x1 = int(x_start + (i / len(values)) * graph_w)
-        x2 = int(x_start + ((i + 1) / len(values)) * graph_w)
-        y1 = value_to_y(values[i])
-        y2 = value_to_y(values[i + 1])
-        cv2.line(new_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    if len(values) > 1:
+        for i in range(len(values) - 1):
+            x1 = int(x_start + (i / len(values)) * graph_w)
+            x2 = int(x_start + ((i + 1) / len(values)) * graph_w)
+            y1 = value_to_y(values[i])
+            y2 = value_to_y(values[i + 1])
+            cv2.line(canvas, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    # Draw RTG line (blue) if available
+    # Draw RTG line (blue)
     if rtgs is not None and len(rtgs) > 1:
         for i in range(len(rtgs) - 1):
             x1 = int(x_start + (i / len(rtgs)) * graph_w)
             x2 = int(x_start + ((i + 1) / len(rtgs)) * graph_w)
             y1 = value_to_y(rtgs[i])
             y2 = value_to_y(rtgs[i + 1])
-            cv2.line(new_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.line(canvas, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            
+    # Legend
+    cv2.putText(canvas, f"V: {values[-1]:.2f}", (x_start, graph_y_start - 2), 
+                font, 0.4, (0, 255, 0), 1)
+    if rtgs:
+        cv2.putText(canvas, f"RTG: {rtgs[-1]:.2f}", (x_start + 80, graph_y_start - 2), 
+                    font, 0.4, (255, 0, 0), 1)
 
-    # Add legend
-    cv2.putText(
-        new_frame,
-        f"V: {values[-1]:.2f}",
-        (x_start, h + 10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (0, 255, 0),
-        1,
-    )
-    if rtgs is not None and len(rtgs) > 0:
-        cv2.putText(
-            new_frame,
-            f"RTG: {rtgs[-1]:.2f}",
-            (x_start + 80, h + 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (255, 0, 0),
-            1,
-        )
+    # --- Draw Text (below graph) ---
+    if text:
+        # Wrap text
+        wrapped_lines = wrap_text(text, font, font_scale, thickness, target_w - 2 * text_padding)
+        
+        text_y_start = graph_y_start + graph_h + text_padding
+        max_y = total_h - line_spacing  # Margin at bottom
+        
+        for i, line in enumerate(wrapped_lines):
+            y_pos = text_y_start + (i * line_spacing)
+            
+            # Stop drawing if we run out of space in the fixed footer
+            if y_pos > max_y:
+                break
+                
+            cv2.putText(canvas, line, (text_padding, y_pos), 
+                        font, font_scale, (200, 200, 200), thickness)
 
-    return new_frame
-
+    return canvas
 
 def run_eval(args):
     """Run evaluation"""
@@ -266,7 +302,7 @@ def run_eval(args):
         print("[DEBUG] Getting first hidden state from VLM server...")
         obs_np = np.array(obs)
 
-        hidden_raw = get_hidden_state_from_server(
+        hidden_raw, current_text = get_hidden_state_from_server(
             args.server_url, obs_np, debug=(ep == 0)
         )
         print(f"[DEBUG] Received hidden state. Shape: {hidden_raw.shape}")
@@ -333,6 +369,7 @@ def run_eval(args):
                     frame_raw.copy(),
                     ep_values,
                     rtgs,
+                    text=current_text,
                     v_min=args.v_min,
                     v_max=args.v_max,
                 )
@@ -341,7 +378,7 @@ def run_eval(args):
             # Get next hidden state
             if not done:
                 obs_np = np.array(obs)
-                hidden_raw = get_hidden_state_from_server(args.server_url, obs_np)
+                hidden_raw, current_text = get_hidden_state_from_server(args.server_url, obs_np)
 
             # Progress updates
             if ep_length % 100 == 0:

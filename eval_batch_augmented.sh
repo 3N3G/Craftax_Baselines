@@ -7,9 +7,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 
-# Batch evaluate all 4 AWR augmented checkpoints with PROPER visualization
-
-SERVER_HOST="${1:-babel-v5-16}"
+SERVER_HOST="${1:-babel-t9-20}"
 SERVER_PORT=5000
 
 # Setup Environment
@@ -49,9 +47,9 @@ echo "✓ Found normalization stats: $STATS_FILE"
 echo ""
 
 CHECKPOINTS=(
-    "awr_aug_checkpoint_25000.pth"
-    "awr_aug_checkpoint_50000.pth"
-    "awr_aug_checkpoint_75000.pth"
+#    "awr_aug_checkpoint_25000.pth"
+#    "awr_aug_checkpoint_50000.pth"
+#    "awr_aug_checkpoint_75000.pth"
     "awr_aug_checkpoint_100000.pth"
 )
 

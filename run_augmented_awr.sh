@@ -29,9 +29,7 @@ echo "Starting on $(hostname) at $(date)"
 echo "WandB writing to local dir: $WANDB_DIR"
 echo ""
 
-# Run the augmented script with FULL parameters
-# NOTE: Training with CORRECT normalization statistics (fixes the 1.1 vs 10-18 performance gap)
-python awr_aug.py \
+python awr_aug_onlygeneration.py \
   --data_dir /data/group_data/rl/geney/craftax_labelled_results_with_returns \
   --save_dir /data/group_data/rl/geney/checkpoints/awr_augmented_v2/ \
   --total_steps 100000 \
@@ -39,7 +37,7 @@ python awr_aug.py \
   --lr 3e-4 \
   --awr_beta 10.0 \
   --seed 42 \
-  --wandb_name awr-augmented-corrected-norm \
+  --wandb_name awr-augmented-onlygeneration \
   --save_freq 25000
 
 echo ""

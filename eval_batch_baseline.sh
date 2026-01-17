@@ -7,8 +7,6 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 
-# Batch evaluate all 4 AWR baseline checkpoints (no VLM, just CNN)
-
 # Setup Environment
 source ~/.bashrc
 conda activate /data/user_data/geney/.conda/envs/test
@@ -34,10 +32,10 @@ echo ""
 CHECKPOINT_DIR="/data/group_data/rl/geney/checkpoints/awr_baseline_v2"
 
 CHECKPOINTS=(
-    "awr_checkpoint_25000.pth"
-    "awr_checkpoint_50000.pth"
-    "awr_checkpoint_75000.pth"
-    "awr_checkpoint_100000.pth"
+#    "awr_checkpoint_25000.pth"
+#    "awr_checkpoint_50000.pth"
+#    "awr_checkpoint_75000.pth"
+     "awr_checkpoint_100000.pth"
 )
 
 for checkpoint in "${CHECKPOINTS[@]}"; do
@@ -50,12 +48,9 @@ for checkpoint in "${CHECKPOINTS[@]}"; do
     python pt_eval_awr.py \
         --checkpoint "${CHECKPOINT_DIR}/${checkpoint}" \
         --env_name "Craftax-Pixels-v1" \
-        --num_episodes 3 \
-        --seed 42 \
+        --num_episodes 100 \
         --wandb_project "craftax-offline-awr" \
         --wandb_entity "iris-sobolmark" \
-        --v_min -1.0 \
-        --v_max 10.0
 
     if [ $? -eq 0 ]; then
         echo "✓ Successfully evaluated $checkpoint"
