@@ -25,90 +25,101 @@ def load_model(checkpoint_path, device):
     return model
 
 
-def draw_dual_value_bar(frame, pred_val, true_val, v_min=-1.0, v_max=10.0):
+def draw_dual_line_graph(frame, values, rtgs, v_min=-1.0, v_max=10.0):
     """
-    Draws TWO bars in the footer:
-    1. Top: Predicted Value (V)
-    2. Bottom: Empirical Return (G)
+    Draw dual line graph with FIXED dimensions.
+    Resizes frame to width 600.
+    Adds a footer for the graph.
     """
-    # Ensure frame is contiguous numpy array for cv2
-    frame = np.ascontiguousarray(frame)
+    # 1. Resize frame for visualization
+    target_w = 600
     h, w, c = frame.shape
+    scale = target_w / w
+    target_h = int(h * scale)
 
-    # Define footer height (increased to fit two bars)
-    footer_h = 50
-    new_h = h + footer_h
+    # 2. Define Footer Size
+    # Reference used 450 for text; we use 100 since we only have the graph.
+    FOOTER_H = 100
 
-    # Create new frame with extra height (initialized to black/dark background)
-    new_frame = np.zeros((new_h, w, c), dtype=frame.dtype)
-    
-    # Copy the original scene onto the top of the new frame
-    new_frame[0:h, 0:w] = frame
+    # Graph Configuration
+    graph_h = 60
 
-    # --- Shared Config ---
-    bar_w = w - 60  # Width of the bar area
-    x_start = 55    # Indent to make room for labels
-    bg_color = (50, 50, 50)
-    text_color = (255, 255, 255)
-    
-    # Helper to draw a single bar
-    def draw_single_bar(y_pos, val, label, color_pos, color_neg):
-        # Draw Label
-        cv2.putText(
-            new_frame, label, (5, y_pos + 8), 
-            cv2.FONT_HERSHEY_SIMPLEX, 0.35, text_color, 1
-        )
-        
-        # Draw Bar Background
-        cv2.rectangle(
-            new_frame, (x_start, y_pos), (x_start + bar_w, y_pos + 10), bg_color, -1
-        )
-        
-        # Calculate Fill
-        clamped_val = max(v_min, min(v_max, val))
-        ratio = (clamped_val - v_min) / (v_max - v_min)
-        fill_w = int(ratio * bar_w)
-        
-        # Determine Color
-        c = color_pos if val > 0 else color_neg
-        
-        # Draw Fill
-        if fill_w > 0:
-            cv2.rectangle(
-                new_frame,
-                (x_start, y_pos),
-                (x_start + fill_w, y_pos + 10),
-                c,
-                -1,
-            )
-        
-        # Draw Numeric Text
-        cv2.putText(
-            new_frame, f"{val:.2f}", (x_start + bar_w + 5, y_pos + 8), 
-            cv2.FONT_HERSHEY_SIMPLEX, 0.35, text_color, 1
-        )
+    # Text Configuration for Legend
+    font = cv2.FONT_HERSHEY_SIMPLEX
 
-    # --- Draw Predicted Value (Top Bar) ---
-    # Green for positive, Red for negative
-    draw_single_bar(
-        y_pos=h + 10, 
-        val=pred_val, 
-        label="Pred V", 
-        color_pos=(0, 255, 0), 
-        color_neg=(0, 0, 255)
+    # Create Canvas
+    total_h = target_h + FOOTER_H
+    canvas = np.zeros((total_h, target_w, c), dtype=frame.dtype)
+
+    # Draw Game Frame
+    # Ensure resizing doesn't change dtype (usually uint8)
+    viz_frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+    canvas[0:target_h, 0:target_w] = viz_frame
+
+    # --- Draw Graph (at top of footer) ---
+    graph_y_start = target_h + 20
+    graph_w = target_w - 20
+    x_start = 10
+
+    # Background for graph
+    cv2.rectangle(
+        canvas,
+        (x_start, graph_y_start),
+        (x_start + graph_w, graph_y_start + graph_h - 10),
+        (30, 30, 30),
+        -1,
     )
 
-    # --- Draw Empirical Return (Bottom Bar) ---
-    # Cyan for positive, Magenta for negative (to distinguish from V)
-    draw_single_bar(
-        y_pos=h + 30, 
-        val=true_val, 
-        label="True G", 
-        color_pos=(255, 255, 0), # Cyan (BGR)
-        color_neg=(255, 0, 255)  # Magenta (BGR)
+    def value_to_y(val):
+        clamped = max(v_min, min(v_max, val))
+        ratio = (clamped - v_min) / (v_max - v_min)
+        # Invert Y (0 is top)
+        return int((graph_y_start + graph_h - 10) - ratio * (graph_h - 20))
+
+    # Draw Value line (green)
+    if len(values) > 1:
+        for i in range(len(values) - 1):
+            x1 = int(x_start + (i / len(values)) * graph_w)
+            x2 = int(x_start + ((i + 1) / len(values)) * graph_w)
+            y1 = value_to_y(values[i])
+            y2 = value_to_y(values[i + 1])
+            cv2.line(canvas, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # Draw RTG line (blue)
+    if rtgs is not None and len(rtgs) > 1:
+        for i in range(len(rtgs) - 1):
+            x1 = int(x_start + (i / len(rtgs)) * graph_w)
+            x2 = int(x_start + ((i + 1) / len(rtgs)) * graph_w)
+            y1 = value_to_y(rtgs[i])
+            y2 = value_to_y(rtgs[i + 1])
+            cv2.line(canvas, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+    # Legend
+    val_disp = values[-1] if values else 0.0
+    rtg_disp = rtgs[-1] if rtgs else 0.0
+
+    cv2.putText(
+        canvas,
+        f"Pred V: {val_disp:.2f}",
+        (x_start, graph_y_start - 5),
+        font,
+        0.5,
+        (0, 255, 0),
+        1,
     )
 
-    return new_frame
+    if rtgs:
+        cv2.putText(
+            canvas,
+            f"True G: {rtg_disp:.2f}",
+            (x_start + 150, graph_y_start - 5),
+            font,
+            0.5,
+            (255, 0, 0),
+            1,
+        )
+
+    return canvas
 
 
 def run_eval(args):
@@ -129,7 +140,7 @@ def run_eval(args):
     model = load_model(args.checkpoint, args.device)
 
     total_rewards = []
-    
+
     print(f"Starting evaluation for {args.num_episodes} episodes...")
 
     for ep in range(args.num_episodes):
@@ -141,17 +152,17 @@ def run_eval(args):
         step_count = 0
 
         # --- Buffers for Two-Pass Rendering ---
-        raw_frames_buffer = [] # Store raw images here
-        ep_values = []         # Store V(s)
-        ep_rewards = []        # Store r
-        
+        raw_frames_buffer = []  # Store raw images here
+        ep_values = []  # Store V(s)
+        ep_rewards = []  # Store r
+
         while not done:
             # 1. Handle Observation Conversion
             obs_np = np.array(obs)
 
             # Convert to proper formats
             frame_raw = obs_to_255_range(obs_np)  # For video (uint8 0-255)
-            obs_01 = obs_to_01_range(obs_np)      # For model (float 0-1)
+            obs_01 = obs_to_01_range(obs_np)  # For model (float 0-1)
 
             obs_tensor = torch.from_numpy(obs_01).float().to(args.device).unsqueeze(0)
 
@@ -196,17 +207,21 @@ def run_eval(args):
         # --- POST-PROCESSING: Generate Video ---
         # Now we have both V(s) and G_t, we can draw the frames
         ep_frames_with_overlay = []
-        
+
         # Determine loop length (handles rare off-by-one edge cases in buffers)
         loop_len = min(len(raw_frames_buffer), len(ep_values), len(returns_to_go))
-        
+
         for i in range(loop_len):
-            frame_overlay = draw_dual_value_bar(
+            # Pass history up to current step i to create the "evolving" effect
+            current_values = ep_values[: i + 1]
+            current_rtgs = returns_to_go[: i + 1]
+
+            frame_overlay = draw_dual_line_graph(
                 frame=raw_frames_buffer[i],
-                pred_val=ep_values[i],
-                true_val=returns_to_go[i],
+                values=current_values,
+                rtgs=current_rtgs,
                 v_min=args.v_min,
-                v_max=args.v_max
+                v_max=args.v_max,
             )
             ep_frames_with_overlay.append(frame_overlay)
 
@@ -220,7 +235,7 @@ def run_eval(args):
                     ys=[ep_values[:loop_len], returns_to_go[:loop_len]],
                     keys=["Predicted Value", "Empirical Return"],
                     title=f"Ep {ep} Value vs Return",
-                    xname="step"
+                    xname="step",
                 )
             }
         )

@@ -254,8 +254,24 @@ def run_eval(args):
 
     # Initialize environment
     print(f"Initializing {args.env_name}...")
+    
+    import craftax.craftax.envs.craftax_pixels_env as pixels_env_module
     from craftax.craftax_env import make_craftax_env_from_name
 
+    Achievement = pixels_env_module.Achievement
+    def log_achievements_to_info_always(state, done):
+        # ORIGINAL: achievements = state.achievements * done * 100.0
+        # NEW: Returns achievements regardless of 'done' state
+        achievements = state.achievements * 100.0
+
+        info = {}
+        for achievement in Achievement:
+            name = f"Achievements/{achievement.name.lower()}"
+            info[name] = achievements[achievement.value]
+        return info
+    pixels_env_module.log_achievements_to_info = log_achievements_to_info_always
+
+    
     env = make_craftax_env_from_name(args.env_name, auto_reset=False)
     env_params = env.default_params
 
@@ -353,6 +369,14 @@ def run_eval(args):
             obs, env_state, reward, done, info = env.step(
                 step_key, env_state, action, env_params
             )
+
+            step_log = {
+                k: v for k, v in info.items() 
+                if k.startswith("Achievements/")
+            }
+            step_log["step_reward"] = float(reward)
+            step_log["step_value"] = value
+            wandb.log(step_log)
 
             ep_return += float(reward)
             ep_rewards.append(float(reward))
