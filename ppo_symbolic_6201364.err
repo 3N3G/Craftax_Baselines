@@ -1,0 +1,85 @@
+ERROR:2026-01-25 11:46:56,653:jax._src.xla_bridge:477: Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/xla_bridge.py", line 475, in discover_pjrt_plugins
+    plugin_module.initialize()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax_plugins/xla_cuda12/__init__.py", line 334, in initialize
+    c_api = xb.register_plugin(
+        'cuda', priority=500, library_path=str(path), options=options
+    )
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/xla_bridge.py", line 611, in register_plugin
+    c_api = xla_client.load_pjrt_plugin_dynamically(plugin_name, library_path)
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jaxlib/xla_client.py", line 117, in load_pjrt_plugin_dynamically
+    return _xla.load_pjrt_plugin(plugin_name, library_path, c_api=None)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: ALREADY_EXISTS: PJRT_Api already exists for device type cuda
+ERROR:jax._src.xla_bridge:Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+Traceback (most recent call last):
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/xla_bridge.py", line 475, in discover_pjrt_plugins
+    plugin_module.initialize()
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax_plugins/xla_cuda12/__init__.py", line 334, in initialize
+    c_api = xb.register_plugin(
+        'cuda', priority=500, library_path=str(path), options=options
+    )
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/xla_bridge.py", line 611, in register_plugin
+    c_api = xla_client.load_pjrt_plugin_dynamically(plugin_name, library_path)
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jaxlib/xla_client.py", line 117, in load_pjrt_plugin_dynamically
+    return _xla.load_pjrt_plugin(plugin_name, library_path, c_api=None)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jax.errors.JaxRuntimeError: ALREADY_EXISTS: PJRT_Api already exists for device type cuda
+W0125 11:47:01.234065  556734 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+W0125 11:47:01.278619  556455 cuda_executor.cc:1802] GPU interconnect information not available: INTERNAL: NVML doesn't support extracting fabric info or NVLink is not used by the device.
+E0125 11:47:01.280256  556455 cuda_dnn.cc:435] There was an error before creating cudnn handle (35): cudaErrorInsufficientDriver : CUDA driver version is insufficient for CUDA runtime version
+E0125 11:47:01.280402  556455 cuda_dnn.cc:435] There was an error before creating cudnn handle (35): cudaErrorInsufficientDriver : CUDA driver version is insufficient for CUDA runtime version
+E0125 11:47:01.819116  556455 cuda_dnn.cc:435] There was an error before creating cudnn handle (35): cudaErrorInsufficientDriver : CUDA driver version is insufficient for CUDA runtime version
+E0125 11:47:01.822850  556455 cuda_dnn.cc:435] There was an error before creating cudnn handle (35): cudaErrorInsufficientDriver : CUDA driver version is insufficient for CUDA runtime version
+Traceback (most recent call last):
+  File "/home/geney/Craftax_Baselines/ppo.py", line 812, in <module>
+    run_ppo(args)
+    ~~~~~~~^^^^^^
+  File "/home/geney/Craftax_Baselines/ppo.py", line 689, in run_ppo
+    rng = jax.random.PRNGKey(config["SEED"])
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/random.py", line 248, in PRNGKey
+    return _return_prng_keys(True, _key('PRNGKey', seed, impl))
+                                   ~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/random.py", line 200, in _key
+    return prng.random_seed(seed, impl=impl)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/prng.py", line 554, in random_seed
+    seeds_arr = jnp.asarray(np.int64(seeds))
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/numpy/array_constructors.py", line 401, in asarray
+    return array(a, dtype=dtype, copy=bool(copy), order=order, device=device,
+                 out_sharding=out_sharding)
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/numpy/array_constructors.py", line 286, in array
+    out_array: Array = lax._convert_element_type(
+                       ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        out, dtype, weak_type=weak_type, sharding=sharding)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/lax/lax.py", line 1727, in _convert_element_type
+    return convert_element_type_p.bind(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        operand, new_dtype=new_dtype, weak_type=bool(weak_type),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        sharding=sharding)
+        ^^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/core.py", line 632, in bind
+    return self._true_bind(*args, **params)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/core.py", line 648, in _true_bind
+    return self.bind_with_trace(prev_trace, args, params)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/lax/lax.py", line 5035, in _convert_element_type_bind_with_trace
+    operand = core.Primitive.bind_with_trace(convert_element_type_p, trace, args, params)
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/core.py", line 660, in bind_with_trace
+    return trace.process_primitive(self, args, params)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/core.py", line 1189, in process_primitive
+    return primitive.impl(*args, **params)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/data/user_data/geney/.conda/envs/test/lib/python3.13/site-packages/jax/_src/dispatch.py", line 92, in apply_primitive
+    outs = fun(*args)
+jax.errors.JaxRuntimeError: FAILED_PRECONDITION: DNN library initialization failed. Look at the errors above for more details.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
+srun: error: babel-v5-16: task 0: Exited with exit code 1

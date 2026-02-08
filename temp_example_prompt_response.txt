@@ -1,0 +1,687 @@
+Prompt received by qwen:
+"""
+<|im_start|>system
+You are playing Craftax.
+
+Craftax is a game about exploring dungeons, mining, crafting and fighting enemies. The player can move in the four cardinal directions and can interact. Interacting can cause the player to attempt to mine (a block), attack (a creature), drink (water or from a fountain), eat (fruit) or open a chest.
+
+The player has 5 'intrinsics': health, hunger, thirst, energy and mana (magical energy). Hunger, thirst and energy will naturally decrease and must be replenished by eating, drinking and sleeping respectively. Mana is used for casting spells or enchanting items and will naturally recover. Health will recover when hunger, thirst and energy are non-zero and will decrease if any of these are 0. If the players health falls beneath 0 they will die and the game will restart.
+
+IMPORTANT: To progress through the game the player needs to find the ladder on each floor, which can be used to descend to the next level. Each floor possesses unique challenges and creatures, increasing in difficulty until the final boss level. The ladders begin closed and the player must kill 8 creatures on each level to open up the respective ladders (with the exception of the overworld). There are 9 levels in total.
+
+Here is a rough outline of an example progression of this game:
+- Gather wood from nearby trees to build a crafting table and then wood tools
+- Find and mine stones to make stone tools or place as a furnace or stone
+- Use your tools to mine iron ore and coal to use for building iron tools and armor, and make sure to collect extra coal and wood to use as torches later in the game
+- The ladder is always open on the overworld, but once you have iron tools and torches you should be ready to descend. Traverse the overworld looking for the ladder and descend.
+- Continue killing creatures, then finding and descending down ladders
+
+Make sure to stay healthy during this process, killing cows (or that level's equivalent peaceful animal), drinking water, and resting enough to keep the intrinsics above 0.
+
+Actions available: 
+0:NOOP, 1:LEFT, 2:RIGHT, 3:UP, 4:DOWN, 5:DO (interact/mine/attack), 6:SLEEP, 7:PLACE_STONE,
+8:PLACE_TABLE, 9:PLACE_FURNACE, 10:PLACE_PLANT, 11:MAKE_WOOD_PICKAXE, 12:MAKE_STONE_PICKAXE,
+13:MAKE_IRON_PICKAXE, 14:MAKE_WOOD_SWORD, 15:MAKE_STONE_SWORD, 16:MAKE_IRON_SWORD, 17:REST,
+18:DESCEND, 19:ASCEND, 20:MAKE_DIAMOND_PICKAXE, 21:MAKE_DIAMOND_SWORD, 22:MAKE_IRON_ARMOUR,
+23:MAKE_DIAMOND_ARMOUR, 24:SHOOT_ARROW, 25:MAKE_ARROW, 26:CAST_FIREBALL, 27:CAST_ICEBALL,
+28:PLACE_TORCH, 29-34:DRINK_POTION_(RED/GREEN/BLUE/PINK/CYAN/YELLOW), 35:READ_BOOK,
+36:ENCHANT_SWORD, 37:ENCHANT_ARMOUR, 38:MAKE_TORCH, 39-41:LEVEL_UP_(DEX/STR/INT), 42:ENCHANT_BOW<|im_end|>
+<|im_start|>user
+Here are some examples of good gameplay:
+
+<|im_start|>user
+Current game state:
+Map:
+-5, -4: grass
+-4, -4: grass
+-3, -4: grass
+-2, -4: grass
+-1, -4: grass
+0, -4: grass
+1, -4: grass
+2, -4: sand
+3, -4: sand
+4, -4: grass
+5, -4: sand
+-5, -3: tree
+-4, -3: grass
+-3, -3: grass
+-2, -3: grass
+-1, -3: grass
+0, -3: grass
+1, -3: stone
+2, -3: grass
+3, -3: grass
+4, -3: grass
+5, -3: grass
+-5, -2: grass
+-4, -2: grass
+-3, -2: grass
+-2, -2: grass
+-1, -2: grass
+0, -2: grass
+1, -2: grass
+2, -2: grass
+3, -2: grass
+4, -2: grass
+5, -2: grass
+-5, -1: grass
+-4, -1: grass
+-3, -1: grass
+-2, -1: grass
+-1, -1: grass
+0, -1: grass
+1, -1: grass
+2, -1: grass
+3, -1: grass
+4, -1: grass
+5, -1: grass
+-5, 0: grass
+-4, 0: grass
+-3, 0: grass
+-2, 0: grass
+-1, 0: grass
+0, 0: grass
+1, 0: grass
+2, 0: grass
+3, 0: grass
+4, 0: grass
+5, 0: grass
+-5, 1: grass
+-4, 1: grass
+-3, 1: grass
+-2, 1: grass
+-1, 1: grass
+0, 1: Cow on grass
+1, 1: grass
+2, 1: grass
+3, 1: grass
+4, 1: grass
+5, 1: grass
+-5, 2: grass
+-4, 2: grass
+-3, 2: tree
+-2, 2: grass
+-1, 2: Cow on grass
+0, 2: sand
+1, 2: grass
+2, 2: grass
+3, 2: grass
+4, 2: grass
+5, 2: grass
+-5, 3: tree
+-4, 3: grass
+-3, 3: grass
+-2, 3: tree
+-1, 3: sand
+0, 3: sand
+1, 3: sand
+2, 3: grass
+3, 3: grass
+4, 3: grass
+5, 3: grass
+-5, 4: grass
+-4, 4: grass
+-3, 4: grass
+-2, 4: grass
+-1, 4: sand
+0, 4: sand
+1, 4: sand
+2, 4: sand
+3, 4: grass
+4, 4: grass
+5, 4: grass
+
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.9064292311668396
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number.
+<|im_end|>
+<|im_start|>assistant
+<think>
+My inventory has 0 Wood, which is the first resource I need to start crafting. I see a tree located at (-3, 2). I am currently at (0, 0). Thus the tree is 3 steps up and 2 steps right. What is one step above me? (-1, 0) is grass. Ok, so I should step up to get closer to the tree.
+</think>
+3
+<|im_end|>
+
+<|im_start|>user
+Current game state:
+Map:
+-5, -4: grass
+-4, -4: grass
+-3, -4: grass
+-2, -4: grass
+-1, -4: grass
+0, -4: grass
+1, -4: grass
+2, -4: sand
+3, -4: sand
+4, -4: grass
+5, -4: sand
+-5, -3: grass
+-4, -3: grass
+-3, -3: grass
+-2, -3: grass
+-1, -3: grass
+0, -3: grass
+1, -3: stone
+2, -3: grass
+3, -3: grass
+4, -3: grass
+5, -3: grass
+-5, -2: grass
+-4, -2: grass
+-3, -2: grass
+-2, -2: grass
+-1, -2: grass
+0, -2: grass
+1, -2: grass
+2, -2: grass
+3, -2: grass
+4, -2: grass
+5, -2: grass
+-5, -1: grass
+-4, -1: grass
+-3, -1: grass
+-2, -1: grass
+-1, -1: grass
+0, -1: grass
+1, -1: grass
+2, -1: grass
+3, -1: grass
+4, -1: grass
+5, -1: grass
+-5, 0: grass
+-4, 0: grass
+-3, 0: grass
+-2, 0: grass
+-1, 0: grass
+0, 0: grass
+1, 0: grass
+2, 0: grass
+3, 0: grass
+4, 0: grass
+5, 0: grass
+-5, 1: grass
+-4, 1: grass
+-3, 1: grass
+-2, 1: grass
+-1, 1: grass
+0, 1: Zombie on grass
+1, 1: grass
+2, 1: grass
+3, 1: grass
+4, 1: grass
+5, 1: grass
+-5, 2: grass
+-4, 2: grass
+-3, 2: grass
+-2, 2: grass
+-1, 2: grass
+0, 2: grass
+1, 2: grass
+2, 2: grass
+3, 2: grass
+4, 2: grass
+5, 2: grass
+-5, 3: grass
+-4, 3: grass
+-3, 3: grass
+-2, 3: grass
+-1, 3: grass
+0, 3: grass
+1, 3: grass
+2, 3: grass
+3, 3: grass
+4, 3: grass
+5, 3: grass
+-5, 4: grass
+-4, 4: grass
+-3, 4: grass
+-2, 4: grass
+-1, 4: grass
+0, 4: grass
+1, 4: grass
+2, 4: grass
+3, 4: grass
+4, 4: grass
+5, 4: grass
+
+Inventory:
+Wood: 1
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 3.0
+Food: 8
+Drink: 8
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.9228113889694214
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number.
+<|im_end|>
+<|im_start|>assistant
+<think>
+My health is very low (3.0), so I am in danger of dying. I need to be careful. Looking at the map, there is a Zombie at (0, 1). I am at (0, 0). The zombie is directly to the right of me (one step in the positive y direction). I need to attack it before it attacks me. To attack, I should use the DO action (Action 5) which performs interact/attack. But first I should move toward it or face it. Actually, let me check what's around me: (0, -1) is grass, (1, 0) is grass, (-1, 0) is grass, (0, 1) is Zombie. But I am low on health. I am also not facing the Zombie. I would need to turn to its direction to interact. If I fight I might run out of health. Maybe I should try to escape. (0, -1) is grass. So I should go left.
+</think>
+1
+<|im_end|>
+
+<|im_start|>user
+Current game state:
+Map:
+-5, -4: grass
+-4, -4: grass
+-3, -4: grass
+-2, -4: grass
+-1, -4: grass
+0, -4: grass
+1, -4: grass
+2, -4: sand
+3, -4: sand
+4, -4: grass
+5, -4: sand
+-5, -3: tree
+-4, -3: grass
+-3, -3: grass
+-2, -3: grass
+-1, -3: grass
+0, -3: grass
+1, -3: stone
+2, -3: grass
+3, -3: grass
+4, -3: grass
+5, -3: grass
+-5, -2: grass
+-4, -2: grass
+-3, -2: grass
+-2, -2: grass
+-1, -2: grass
+0, -2: grass
+1, -2: grass
+2, -2: grass
+3, -2: grass
+4, -2: grass
+5, -2: grass
+-5, -1: grass
+-4, -1: grass
+-3, -1: grass
+-2, -1: grass
+-1, -1: grass
+0, -1: grass
+1, -1: grass
+2, -1: grass
+3, -1: grass
+4, -1: grass
+5, -1: grass
+-5, 0: grass
+-4, 0: grass
+-3, 0: grass
+-2, 0: grass
+-1, 0: grass
+0, 0: grass
+1, 0: grass
+2, 0: grass
+3, 0: grass
+4, 0: grass
+5, 0: grass
+-5, 1: grass
+-4, 1: grass
+-3, 1: grass
+-2, 1: grass
+-1, 1: Cow on grass
+0, 1: grass
+1, 1: grass
+2, 1: grass
+3, 1: grass
+4, 1: grass
+5, 1: grass
+-5, 2: grass
+-4, 2: grass
+-3, 2: tree
+-2, 2: tree
+-1, 2: grass
+0, 2: Cow on sand
+1, 2: grass
+2, 2: grass
+3, 2: grass
+4, 2: grass
+5, 2: grass
+-5, 3: tree
+-4, 3: grass
+-3, 3: grass
+-2, 3: tree
+-1, 3: sand
+0, 3: sand
+1, 3: sand
+2, 3: grass
+3, 3: grass
+4, 3: grass
+5, 3: grass
+-5, 4: grass
+-4, 4: grass
+-3, 4: grass
+-2, 4: grass
+-1, 4: sand
+0, 4: sand
+1, 4: sand
+2, 4: sand
+3, 4: grass
+4, 4: grass
+5, 4: grass
+
+Inventory:
+Wood: 1
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: up
+Light: 0.9278628826141357
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number.
+<|im_end|>
+<|im_start|>assistant
+<think>
+I have wood in my inventory, which is enough to make a crafting table and start crafting wood tools. Looking at my current position (0, 0), I can see there's a stone at (1, -3). and a cow at (-1, 1). I have enough wood now to place a crafting table. Before I can craft a Wood Pickaxe (Action 11), I must first place a crafting table at my current location. Action 8 is PLACE_TABLE.
+</think>
+8
+<|im_end|>
+
+
+Current game state:
+Map:
+-5, -4: grass
+-4, -4: grass
+-3, -4: sand
+-2, -4: sand
+-1, -4: grass
+0, -4: sand
+1, -4: sand
+2, -4: water
+3, -4: water
+4, -4: water
+5, -4: water
+-5, -3: grass
+-4, -3: stone
+-3, -3: grass
+-2, -3: grass
+-1, -3: grass
+0, -3: grass
+1, -3: grass
+2, -3: grass
+3, -3: sand
+4, -3: water
+5, -3: water
+-5, -2: grass
+-4, -2: grass
+-3, -2: grass
+-2, -2: grass
+-1, -2: grass
+0, -2: grass
+1, -2: grass
+2, -2: grass
+3, -2: grass
+4, -2: sand
+5, -2: sand
+-5, -1: grass
+-4, -1: grass
+-3, -1: grass
+-2, -1: grass
+-1, -1: grass
+0, -1: grass
+1, -1: grass
+2, -1: grass
+3, -1: grass
+4, -1: grass
+5, -1: sand
+-5, 0: grass
+-4, 0: grass
+-3, 0: grass
+-2, 0: grass
+-1, 0: grass
+0, 0: grass
+1, 0: tree
+2, 0: grass
+3, 0: grass
+4, 0: grass
+5, 0: grass
+-5, 1: grass
+-4, 1: grass
+-3, 1: grass
+-2, 1: grass
+-1, 1: grass
+0, 1: grass
+1, 1: grass
+2, 1: tree
+3, 1: tree
+4, 1: grass
+5, 1: grass
+-5, 2: sand
+-4, 2: grass
+-3, 2: grass
+-2, 2: grass
+-1, 2: grass
+0, 2: grass
+1, 2: grass
+2, 2: grass
+3, 2: grass
+4, 2: grass
+5, 2: grass
+-5, 3: sand
+-4, 3: sand
+-3, 3: grass
+-2, 3: grass
+-1, 3: grass
+0, 3: grass
+1, 3: grass
+2, 3: grass
+3, 3: grass
+4, 3: grass
+5, 3: grass
+-5, 4: sand
+-4, 4: sand
+-3, 4: sand
+-2, 4: grass
+-1, 4: grass
+0, 4: grass
+1, 4: grass
+2, 4: grass
+3, 4: grass
+4, 4: grass
+5, 4: grass
+
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: right
+Light: 0.830528199672699
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+
+You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number. <|im_end|>
+<|im_start|>assistant
+<think>
+"""
+
+qwen's response:
+"""
+Okay, let me try to figure out what to do here. So the current game state shows that I'm at (0,0) with the direction set to right. My inventory has 0 Wood, Stone, Coal, etc. Wait, earlier I had Wood:1, but now it's 0. Hmm, maybe I used it already.
+
+Looking at the map, there's a tree at (1,0) and (2,1), (3,1). Trees are good for getting saplings. Also, there's water in some areas, like (2,-4) and others. But I need wood first to craft tools.
+
+Since my wood is 0 now, I need to get more wood. The trees are at (1,0), (2,1), (3,1). To get wood, I should mine the trees? Wait, no. In the game, you can't mine trees directly. Wait, in Craftax, you need to interact with trees to get saplings, which can then be used to make wood. Wait, but the actions available include things like "DO" which is interact. So maybe I need to go to a tree and interact with it to get a sapling.
+
+Wait, in the previous steps, when I placed a crafting table (action 8), I had Wood:1. But now it's 0. Maybe I used the wood to craft something. Let me check the actions. The user had made a crafting table before, but now they don't have wood. So perhaps the next step is to get more wood by interacting with trees.
+
+The map shows trees at (1,0), (2,1), (3,1). Let me see my current position: (0,0). So to get to a tree, I need to move right to (1,0), but that's a tree. Wait, the map says (1,0) is tree. So if I move right (action 1 is left, 2 is right), so action 2 would take me to (1,0). Then I can interact (action 5) with the tree to get a sapling. But the inventory shows Sapling:0, so maybe that's the next step.
+
+Wait, the problem says that the player can interact to mine a block, attack a creature, drink, eat, open a chest. So interacting with a tree would give saplings. Then, with saplings, I can make wood. Wait, maybe the game mechanics are that you need to cut trees to get saplings, which are then used to make wood.
+
+But in the inventory, there's no sapling. So I need to first interact with a tree to get a sapling. Let me check the map again. At (1,0) is a tree. So I should move right to (1,0), then interact (DO) to get a sapling. Then I can use the sapling to make wood.
+
+Wait, the available actions include "PLACE_TABLE" (8), but I already placed a table earlier. The current inventory has 0 wood, so I need to get wood. Let's think step by step.
+
+Current position: (0,0). Direction is right. So to get to the tree at (1,0), I should move right (action 2). Then interact with the tree (action 5) to get a sapling. Once I have a sapling, I can craft wood (using the crafting table). But wait, I placed a table earlier (action 8), so the table should be there. Wait, the problem says that when you place a table, it's part of the crafting.
+
+Wait, in the previous state, the user had placed a table (action 8), so the crafting table is in the inventory. But now, after that, the wood count went to 0. Maybe the player used the wood to craft something else.
+
+But the current inventory shows Wood:0. So the next step is to get more wood. To do that, I need to get a sapling from a tree.
+
+The map shows trees at (1,0), (2,1), (3,1). Let's pick one. The closest is (1,0) which is right next to me (since I'm at (0,0)). So I should move right (action 2) to (1,0), then interact (action 5) with the tree to get a sapling.
+
+Once I have the sapling, I can craft wood (using the crafting table). But I need to check if the crafting table is still there. Wait, the previous action was placing the table (action 8), so the table is in the game world. So after getting the sapling, I can place it on the table to make wood.
+
+Wait, but the actions for crafting are like MAKE_WOOD_PICKAXE (11), which requires wood. So first, I need to have wood to make tools. Hmm, but without wood, I can't make anything. So the sequence is: get sapling from tree → make wood from sapling → then make tools.
+
+Wait, maybe the game works differently. In some games, you need to chop a tree to get wood, which gives you wood blocks. But here, the actions might be different.
+
+Alternatively, maybe the player needs to mine a stone block to get stone, but the inventory shows stone is 0. Wait, the map has stone at (-4,-3), (1,-3), etc.
+
+Wait, the user is at (0,0). Let me check the map again for nearby resources.
+
+At (0,0) is grass. To the right (1,0) is a tree. To the left (-1,0) is grass. Up (0,1) is grass. Down (0,-1) is grass.
+
+So the best move is to go right to the tree at (1,0), then interact to get a sapling. Then, with the sapling, craft wood.
+
+So the next action should be to move right (action 2) to (1,0), then interact (action 5) with the tree.
+
+Wait, but the user has to pick one action. The current state says "You are at (0,0); pick an action." So the first step is to move right (action 2) to get to the tree.
+
+Wait, but maybe there's a better option. Let me check if there's water nearby. There's water at (2,-4), (3,-4), etc. But drinking water would help with thirst, but the user's drink is 9, so maybe not necessary now.
+
+Alternatively, since the ladder is open (Floor 0), but the player needs to descend to the next floor. But the problem states that you need to kill 8 creatures per floor to open the ladder, so maybe the ladder is already open here (since it's the overworld? Wait, the game states that the ladder is always open on the overworld, but once you have iron tools and torches, you can descend.
+
+Wait, the current floor is 0, which is the overworld. So the ladder is open. But the player needs to find the ladder to descend. Wait, the problem says "the ladder begins closed and the player must kill 8 creatures on each level to open up the respective ladders (with the exception of the overworld)". So the overworld's ladder is open. But the player needs to find it.
+
+But in this current state, the user is at (0,0) and the map shows the overworld. Maybe the ladder is somewhere in the map. But the user hasn't found it yet.
+
+However, the priority now is to get wood to craft tools. Since the player has 0 wood, and the map has trees, moving to the tree to get saplings is the way to go.
+
+So the next action is to move right (action 2) to (1,0), which is a tree. Then interact with it (action 5) to get sapling.
+
+But the user has to pick one action. The current step is to choose the action from the list (0-42). So the immediate next step is to move right (action 2) to get to the tree.
+
+Wait, but the direction is already right. Wait, the current direction is "right" (as per the game state: Direction: right). So the player is facing right. So moving right would take them to (1,0), which is a tree.
+
+Yes, so the correct action here is 2 (RIGHT) to move towards the tree at (1,0).
+</think>
+"""

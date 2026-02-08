@@ -1,0 +1,49 @@
+[
+  {
+    "backend": "huggingface",
+    "total_time_s": 14.963818359188735,
+    "samples_per_sec": 0.5346229022545901,
+    "mean_latency_s": 14.96374653885141,
+    "hidden_shape": [
+      8,
+      2560
+    ],
+    "hidden_size": 2560,
+    "tokens_generated": 256,
+    "num_samples": 8,
+    "sample_output": "1. move, 2. attack, 3. run, 4. use, 5. pick up, 6. equip, 7. inspect\n\nOkay, the user has given me a map description and some game state information. Let me break this down carefully.\n\nFirst, looking a"
+  },
+  {
+    "backend": "huggingface_flash",
+    "flash_attention_enabled": false,
+    "total_time_s": 12.659791990648955,
+    "samples_per_sec": 0.6319219151396113,
+    "mean_latency_s": 12.659736201167107,
+    "hidden_shape": [
+      8,
+      2560
+    ],
+    "hidden_size": 2560,
+    "tokens_generated": 256,
+    "num_samples": 8
+  },
+  {
+    "backend": "sglang",
+    "error": "Cannot connect to server: HTTPConnectionPool(host='localhost', port=30000): Max retries exceeded with url: /health (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=30000): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+  },
+  {
+    "backend": "vllm_hf_hybrid",
+    "total_time_s": 44.954991673119366,
+    "vllm_gen_time_s": 42.81807132717222,
+    "hf_forward_time_s": 2.1369203459471464,
+    "samples_per_sec": 0.1779557664735052,
+    "hidden_shape": [
+      8,
+      2560
+    ],
+    "hidden_size": 2560,
+    "tokens_generated": 256,
+    "num_samples": 8,
+    "note": "vLLM generates text, HF does forward pass to get hidden states"
+  }
+]

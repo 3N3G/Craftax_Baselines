@@ -1,0 +1,619 @@
+Prompt:
+
+<|im_start|>system
+You are playing Craftax.
+
+Craftax is a game about exploring dungeons, mining, crafting and fighting enemies. The player can move in the four cardinal directions and can interact. Interacting can cause the player to attempt to mine (a block), attack (a creature), drink (water or from a fountain), eat (fruit) or open a chest. This interaction will only happen if the block/creature/chest is directly in front of the player, one step in the direction the player is facing. 
+The player has 5 'intrinsics': health, hunger, thirst, energy and mana (magical energy). Hunger, thirst and energy will naturally decrease and must be replenished by eating, drinking and sleeping respectively. Mana is used for casting spells or enchanting items and will naturally recover. Health will recover when hunger, thirst and energy are non-zero and will decrease if any of these are 0. If the players health falls beneath 0 they will die and the game will restart.
+
+IMPORTANT: To progress through the game the player needs to find the ladder on each floor, which can be used to descend to the next level. Each floor possesses unique challenges and creatures, increasing in difficulty until the final boss level. The ladders begin closed and the player must kill 8 creatures on each level to open up the respective ladders (with the exception of the overworld). There are 9 levels in total.
+
+Here is a rough outline of an example progression of this game:
+- Gather wood from nearby trees to build a crafting table and then wood tools
+- Find and mine stones to make stone tools or place as a furnace or stone
+- Use your tools to mine iron ore and coal to use for building iron tools and armor, and make sure to collect extra coal and wood to use as torches later in the game
+- The ladder is always open on the overworld, but once you have iron tools and torches you should be ready to descend. Traverse the overworld looking for the ladder and descend.
+- Continue killing creatures, then finding and descending down ladders
+
+Make sure to stay healthy during this process, killing cows (or that level's equivalent peaceful animal), drinking water, and resting enough to keep the intrinsics above 0. 
+
+Actions available: 
+0:NOOP, 1:LEFT, 2:RIGHT, 3:UP, 4:DOWN, 5:DO (interact/mine/attack), 6:SLEEP, 7:PLACE_STONE,
+8:PLACE_TABLE, 9:PLACE_FURNACE, 10:PLACE_PLANT, 11:MAKE_WOOD_PICKAXE, 12:MAKE_STONE_PICKAXE,
+13:MAKE_IRON_PICKAXE, 14:MAKE_WOOD_SWORD, 15:MAKE_STONE_SWORD, 16:MAKE_IRON_SWORD, 17:REST,
+18:DESCEND, 19:ASCEND, 20:MAKE_DIAMOND_PICKAXE, 21:MAKE_DIAMOND_SWORD, 22:MAKE_IRON_ARMOUR,
+23:MAKE_DIAMOND_ARMOUR, 24:SHOOT_ARROW, 25:MAKE_ARROW, 26:CAST_FIREBALL, 27:CAST_ICEBALL,
+28:PLACE_TORCH, 29-34:DRINK_POTION_(RED/GREEN/BLUE/PINK/CYAN/YELLOW), 35:READ_BOOK,
+36:ENCHANT_SWORD, 37:ENCHANT_ARMOUR, 38:MAKE_TORCH, 39-41:LEVEL_UP_(DEX/STR/INT), 42:ENCHANT_BOW<|im_end|>
+<|im_start|>user
+Below are examples of good gameplay decisions. These are EXAMPLES ONLY, not your actual game history:
+
+
+--- EXAMPLE 1: Moving to gather wood from a tree ---
+Game State:
+Map: -5,-4:grass, -4,-4:grass, -3,-4:grass, -2,-4:grass, -1,-4:grass, 0,-4:grass, 1,-4:grass, 2,-4:sand, 3,-4:sand, 4,-4:grass, 5,-4:sand, -5,-3:tree, -4,-3:grass, -3,-3:grass, -2,-3:grass, -1,-3:grass, 0,-3:grass, 1,-3:stone, 2,-3:grass, 3,-3:grass, 4,-3:grass, 5,-3:grass, -5,-2:grass, -4,-2:grass, -3,-2:grass, -2,-2:grass, -1,-2:grass, 0,-2:grass, 1,-2:grass, 2,-2:grass, 3,-2:grass, 4,-2:grass, 5,-2:grass, -5,-1:grass, -4,-1:grass, -3,-1:grass, -2,-1:grass, -1,-1:grass, 0,-1:grass, 1,-1:grass, 2,-1:grass, 3,-1:grass, 4,-1:grass, 5,-1:grass, -5,0:grass, -4,0:grass, -3,0:grass, -2,0:grass, -1,0:grass, 0,0:grass, 1,0:grass, 2,0:grass, 3,0:grass, 4,0:grass, 5,0:grass, -5,1:grass, -4,1:grass, -3,1:grass, -2,1:grass, -1,1:grass, 0,1:Cow on grass, 1,1:grass, 2,1:grass, 3,1:grass, 4,1:grass, 5,1:grass, -5,2:grass, -4,2:grass, -3,2:tree, -2,2:grass, -1,2:Cow on grass, 0,2:sand, 1,2:grass, 2,2:grass, 3,2:grass, 4,2:grass, 5,2:grass, -5,3:tree, -4,3:grass, -3,3:grass, -2,3:tree, -1,3:sand, 0,3:sand, 1,3:sand, 2,3:grass, 3,3:grass, 4,3:grass, 5,3:grass, -5,4:grass, -4,4:grass, -3,4:grass, -2,4:grass, -1,4:sand, 0,4:sand, 1,4:sand, 2,4:sand, 3,4:grass, 4,4:grass, 5,4:grass
+Inventory: Wood:0, Stone:0, Coal:0, Iron:0, Diamond:0, Sapphire:0, Ruby:0, Sapling:0, Torch:0, Arrow:0, Book:0, Red potion:0, Green potion:0, Blue potion:0, Pink potion:0, Cyan potion:0, Yellow potion:0, Health:9.0, Food:9, Drink:9, Energy:9, Mana:9, XP:0, Dexterity:1, Strength:1, Intelligence:1, Direction:left, Light:0.906, Is Sleeping:False, Is Resting:False, Learned Fireball:False, Learned Iceball:False, Floor:0, Ladder Open:True, Is Boss Vulnerable:False
+Good reasoning: "My inventory has 0 Wood, which is the first resource I need to start crafting. I see a tree located at (-3, 2). I am currently at (0, 0). Thus the tree is 3 steps left and 2 steps down. What is one step to my left? (-1, 0) is grass. Ok, so I should step left to get closer to the tree."
+Good action: 1 (LEFT)
+
+--- EXAMPLE 2: Escaping from a zombie when health is low ---
+Game State:
+Map: -5,-4:grass, -4,-4:grass, -3,-4:grass, -2,-4:grass, -1,-4:grass, 0,-4:grass, 1,-4:grass, 2,-4:sand, 3,-4:sand, 4,-4:grass, 5,-4:sand, -5,-3:grass, -4,-3:grass, -3,-3:grass, -2,-3:grass, -1,-3:grass, 0,-3:grass, 1,-3:stone, 2,-3:grass, 3,-3:grass, 4,-3:grass, 5,-3:grass, -5,-2:grass, -4,-2:grass, -3,-2:grass, -2,-2:grass, -1,-2:grass, 0,-2:grass, 1,-2:grass, 2,-2:grass, 3,-2:grass, 4,-2:grass, 5,-2:grass, -5,-1:grass, -4,-1:grass, -3,-1:grass, -2,-1:grass, -1,-1:grass, 0,-1:grass, 1,-1:grass, 2,-1:grass, 3,-1:grass, 4,-1:grass, 5,-1:grass, -5,0:grass, -4,0:grass, -3,0:grass, -2,0:grass, -1,0:grass, 0,0:grass, 1,0:grass, 2,0:grass, 3,0:grass, 4,0:grass, 5,0:grass, -5,1:grass, -4,1:grass, -3,1:grass, -2,1:grass, -1,1:grass, 0,1:Zombie on grass, 1,1:grass, 2,1:grass, 3,1:grass, 4,1:grass, 5,1:grass, -5,2:grass, -4,2:grass, -3,2:grass, -2,2:grass, -1,2:grass, 0,2:grass, 1,2:grass, 2,2:grass, 3,2:grass, 4,2:grass, 5,2:grass, -5,3:grass, -4,3:grass, -3,3:grass, -2,3:grass, -1,3:grass, 0,3:grass, 1,3:grass, 2,3:grass, 3,3:grass, 4,3:grass, 5,3:grass, -5,4:grass, -4,4:grass, -3,4:grass, -2,4:grass, -1,4:grass, 0,4:grass, 1,4:grass, 2,4:grass, 3,4:grass, 4,4:grass, 5,4:grass
+Inventory: Wood:1, Stone:0, Coal:0, Iron:0, Diamond:0, Sapphire:0, Ruby:0, Sapling:0, Torch:0, Arrow:0, Book:0, Red potion:0, Green potion:0, Blue potion:0, Pink potion:0, Cyan potion:0, Yellow potion:0, Health:3.0, Food:8, Drink:8, Energy:9, Mana:9, XP:0, Dexterity:1, Strength:1, Intelligence:1, Direction:left, Light:0.922, Is Sleeping:False, Is Resting:False, Learned Fireball:False, Learned Iceball:False, Floor:0, Ladder Open:True, Is Boss Vulnerable:False
+Good reasoning: "My health is very low (3.0), so I am in danger of dying. There is a Zombie at (0, 1), which is directly below me. I am at (0, 0). The zombie is adjacent and dangerous. If I fight with only 3 health, I might die. I should escape. Looking around: (0, -1) is grass above me, (-1, 0) is grass to my left, (1, 0) is grass to my right. I should move away from the zombie. Going left (action 1) will take me to (-1, 0) which is grass and away from danger."
+Good action: 1 (LEFT)
+
+--- EXAMPLE 3: Placing a crafting table to begin tool progression ---
+Game State:
+Map: -5,-4:grass, -4,-4:grass, -3,-4:grass, -2,-4:grass, -1,-4:grass, 0,-4:grass, 1,-4:grass, 2,-4:sand, 3,-4:sand, 4,-4:grass, 5,-4:sand, -5,-3:tree, -4,-3:grass, -3,-3:grass, -2,-3:grass, -1,-3:grass, 0,-3:grass, 1,-3:stone, 2,-3:grass, 3,-3:grass, 4,-3:grass, 5,-3:grass, -5,-2:grass, -4,-2:grass, -3,-2:grass, -2,-2:grass, -1,-2:grass, 0,-2:grass, 1,-2:grass, 2,-2:grass, 3,-2:grass, 4,-2:grass, 5,-2:grass, -5,-1:grass, -4,-1:grass, -3,-1:grass, -2,-1:grass, -1,-1:grass, 0,-1:grass, 1,-1:grass, 2,-1:grass, 3,-1:grass, 4,-1:grass, 5,-1:grass, -5,0:grass, -4,0:grass, -3,0:grass, -2,0:grass, -1,0:grass, 0,0:grass, 1,0:grass, 2,0:grass, 3,0:grass, 4,0:grass, 5,0:grass, -5,1:grass, -4,1:grass, -3,1:grass, -2,1:grass, -1,1:Cow on grass, 0,1:grass, 1,1:grass, 2,1:grass, 3,1:grass, 4,1:grass, 5,1:grass, -5,2:grass, -4,2:grass, -3,2:tree, -2,2:tree, -1,2:grass, 0,2:Cow on sand, 1,2:grass, 2,2:grass, 3,2:grass, 4,2:grass, 5,2:grass, -5,3:tree, -4,3:grass, -3,3:grass, -2,3:tree, -1,3:sand, 0,3:sand, 1,3:sand, 2,3:grass, 3,3:grass, 4,3:grass, 5,3:grass, -5,4:grass, -4,4:grass, -3,4:grass, -2,4:grass, -1,4:sand, 0,4:sand, 1,4:sand, 2,4:sand, 3,4:grass, 4,4:grass, 5,4:grass
+Inventory: Wood:1, Stone:0, Coal:0, Iron:0, Diamond:0, Sapphire:0, Ruby:0, Sapling:0, Torch:0, Arrow:0, Book:0, Red potion:0, Green potion:0, Blue potion:0, Pink potion:0, Cyan potion:0, Yellow potion:0, Health:9.0, Food:9, Drink:9, Energy:9, Mana:9, XP:0, Dexterity:1, Strength:1, Intelligence:1, Direction:up, Light:0.927, Is Sleeping:False, Is Resting:False, Learned Fireball:False, Learned Iceball:False, Floor:0, Ladder Open:True, Is Boss Vulnerable:False
+Good reasoning: "I have 1 Wood in my inventory. Looking at my current position (0, 0), I can see there's a stone at (1, -3) and cows nearby at (-1, 1) and (0, 2). I have enough wood now to place a crafting table. This is the first step in the progression: place table → craft wood pickaxe → mine stone → make stone tools. I should place a crafting table here. Action 8 is PLACE_TABLE."
+Good action: 8 (PLACE_TABLE)
+
+--- END OF EXAMPLES ---
+
+
+Now here is YOUR CURRENT game state:
+Map:
+-5, -4: grass
+-4, -4: grass
+-3, -4: sand
+-2, -4: sand
+-1, -4: grass
+0, -4: sand
+1, -4: sand
+2, -4: water
+3, -4: water
+4, -4: water
+5, -4: water
+-5, -3: grass
+-4, -3: stone
+-3, -3: grass
+-2, -3: grass
+-1, -3: grass
+0, -3: grass
+1, -3: grass
+2, -3: grass
+3, -3: sand
+4, -3: water
+5, -3: water
+-5, -2: grass
+-4, -2: grass
+-3, -2: grass
+-2, -2: grass
+-1, -2: grass
+0, -2: grass
+1, -2: grass
+2, -2: grass
+3, -2: grass
+4, -2: sand
+5, -2: sand
+-5, -1: grass
+-4, -1: grass
+-3, -1: grass
+-2, -1: grass
+-1, -1: grass
+0, -1: grass
+1, -1: grass
+2, -1: grass
+3, -1: grass
+4, -1: grass
+5, -1: sand
+-5, 0: grass
+-4, 0: grass
+-3, 0: grass
+-2, 0: grass
+-1, 0: grass
+0, 0: grass
+1, 0: grass
+2, 0: grass
+3, 0: grass
+4, 0: grass
+5, 0: grass
+-5, 1: Cow on grass
+-4, 1: grass
+-3, 1: grass
+-2, 1: grass
+-1, 1: grass
+0, 1: grass
+1, 1: grass
+2, 1: tree
+3, 1: tree
+4, 1: grass
+5, 1: grass
+-5, 2: sand
+-4, 2: grass
+-3, 2: grass
+-2, 2: grass
+-1, 2: grass
+0, 2: grass
+1, 2: grass
+2, 2: grass
+3, 2: grass
+4, 2: grass
+5, 2: grass
+-5, 3: sand
+-4, 3: sand
+-3, 3: grass
+-2, 3: grass
+-1, 3: grass
+0, 3: grass
+1, 3: grass
+2, 3: grass
+3, 3: grass
+4, 3: grass
+5, 3: grass
+-5, 4: sand
+-4, 4: sand
+-3, 4: sand
+-2, 4: grass
+-1, 4: grass
+0, 4: grass
+1, 4: grass
+2, 4: grass
+3, 4: grass
+4, 4: grass
+5, 4: grass
+
+Inventory:
+Wood: 1
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: right
+Light: 0.8944774270057678
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+
+You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number.<|im_end|>
+<|im_start|>assistant
+<think>
+
+Response:
+
+the current game state. I'm at position (0,0) on floor 0. The ladder is open, which is good because I can descend later.
+
+Looking at the map, I see that there's a cow at (-5,1) and trees at (2,1) and (3,1). Also, there's water in the lower rows, like at (2,-4) to (5,-4) is water, and (4,-3) and (5,-3) are water.
+
+My inventory has Wood:1, and all other resources are 0. That means I have one piece of wood, which is probably from a tree I've already interacted with or something.
+
+The key point is that I need to start crafting. Since I have wood, I should make a crafting table to craft more wood and tools.
+
+In the examples, when they had wood, they placed a crafting table. For instance, in EXAMPLE 3, they had Wood:1 and placed a table.
+
+Here, I'm facing right (Direction: right), so I'm looking towards positive x-direction.
+
+I should check what's directly in front of me. Since I'm at (0,0) and facing right, the next cell is (1,0), which from the map is grass.
+
+The map shows: for y=-4 to y=4, x from -5 to 5.
+
+At (0,0): grass
+
+(1,0): grass
+
+(2,0): grass
+
+etc.
+
+So, to the right, it's grass, but I don't have anything to interact with directly. I need to move to get closer to resources.
+
+I have wood, so I should use it to make a crafting table. But to place a table, I need to be at a position where I can place it, and the table is placed on the ground.
+
+In the actions, PLACE_TABLE is action 8, and it requires that I'm at a valid position to place it, like on grass or dirt.
+
+The map shows that at (0,0) it's grass, so I can place a table there.
+
+But to place a table, I need to be facing the direction where I want to place it? No, in the game, placing an item usually doesn't depend on direction; it's just the cell you're in.
+
+In Craftax, when you interact (action 5), it's for mining, attacking, etc., but for placing, like PLACE_TABLE, it's a separate action that places the table at your current position.
+
+From the action list: 8:PLACE_TABLE – this should place a crafting table at the current position.
+
+Similarly, for other placements.
+
+So, I have wood in inventory, but to make a table, I need to craft it, which requires the table to be placed first.
+
+The process is: place table, then craft wood pickaxe, etc.
+
+Currently, I have wood, but no table. So I need to place a table first.
+
+In the inventory, I have Wood:1, but I don't have a table, so I can't craft anything yet.
+
+The good action would be to place a crafting table.
+
+But where? At (0,0), it's grass, so I can place it.
+
+In the examples, they placed the table at their current position.
+
+For instance, in EXAMPLE 3, they were at (0,0) and placed table.
+
+Here, I'm at (0,0), facing right.
+
+So, I should do action 8: PLACE_TABLE.
+
+But let me confirm if there's anything better.
+
+I see water at (2,-4) to (5,-4), but water might be for drinking, but I have drink:9, so I don't need to drink yet.
+
+Also, there are trees at (2,1) and (3,1), so I could mine wood from them, but I already have wood, and I need to make tools.
+
+The first step is to have a crafting table.
+
+Since I have wood, I should place the table to craft more wood and tools.
+
+Another thing: I need to kill 8 creatures to open the ladder, but on floor 0, the ladder is open, so I don't need to kill anything yet for descent.
+
+The ladder is open on floor 0, so I can descend immediately, but I need to have tools to do that safely.
+
+The game says: "The ladder is always open on the overworld, but once you have iron tools and torches you should be ready to descend."
+
+Here, I'm on floor 0, which is the overworld, I think? The game says: "the ladder is always open on the overworld", so floor 0 might be the overworld.
+
+In the state, Floor:0, and Ladder Open:True.
+
+So, I can descend to floor 1, but I need tools to handle enemies and such.
+
+Currently, I have wood, but no tools.
+
+So, placing a table is the logical first step.
+
+Let me see if there's a creature I can interact with.
+
+At (0,0), facing right: (1,0) is grass, so nothing to interact with.
+
+I could move to get closer to trees.
+
+For example, there's a tree at (2,1) and (3,1), but they are not directly in front.
+
+Since I'm at (0,0), to get to the trees, I need to move.
+
+But the immediate action: I have wood, so I should place the table.
+
+In the action list, PLACE_TABLE is 8.
+
+Also, in the inventory, I have Wood:1, which might be from a previous interaction.
+
+But to place the table, I don't need to interact with anything; it's a crafting action.
+
+The game says: "Interacting can cause the player to attempt to mine (a block), attack (a creature), drink (water or from a fountain), eat (fruit) or open a chest." But placing a table is not an interaction; it's a specific action.
+
+Actions: 8 is PLACE_TABLE, which is a separate action.
+
+Similarly, 10 is PLACE_PLANT, etc.
+
+So, I think I should do 8: PLACE_TABLE.
+
+But let me see if there's a reason not to.
+
+I have health:9, food:9, drink:9, energy:9, mana:9, all good, so no immediate danger.
+
+The map shows water, but I don't need to drink yet.
+
+Also, there's a cow at (-5,1), but it's far away.
+
+I should place the table to start crafting.
+
+In the examples, when they had wood, they placed the table.
+
+Here, I have wood:1, so same situation.
+
+Another thought: the wood might be from a tree, but I need to mine it to get more.
+
+But I have one piece, so I can craft with it.
+
+To craft a wood pickaxe, I need a table.
+
+So, step 1: place table.
+
+Then, with table, craft wood pickaxe.
+
+Then, mine more wood or stone.
+
+In this map, I see stone at (-4,-3), and grass, etc.
+
+But for now, the best action is to place the table.
+
+Let's see the direction: I'm facing right, but that shouldn't matter for placing.
+
+In the action, it's just the action number.
+
+So, I think action 8 is correct.
+
+But let me double-check the map.
+
+At (0,0): grass
+
+If I place table there, it should be fine.
+
+I could move to get to a tree to get more wood.
+
+For example, there's a tree at (2,1), which is two steps right and one up? Positions: x from -5 to 5, y from -4 to 4? In the map, it's given with coordinates.
+
+The map is listed as: for example, -5,-4: grass, etc.
+
+In the state, it says: -5, -4: grass, ..., up to -5,4: sand, etc.
+
+At (0,0): grass
+
+(1,0): grass
+
+(2,0): grass
+
+(3,0): grass
+
+(4,0): grass
+
+(5,0): grass
+
+(0,1): grass
+
+(0,2): grass
+
+(0,3): grass
+
+(0,4): grass? No, let's see.
+
+The map entry: for y=4, it's given: -5,4: sand, -4,4: sand, -3,4: sand, -2,4: grass, etc.
+
+But for (0,0), it's grass.
+
+To get to a tree: there are trees at (2,1) and (3,1), so from (0,0), to get to (2,1), I need to move right twice and up once.
+
+But I have wood, so I don't need to get more wood immediately; I can place the table and then craft.
+
+In fact, the first step in the progression is to place a table.
+
+In EXAMPLE 3, they had wood and placed table.
+
+Similarly here.
+
+Also, in the inventory, I have Wood:1, so I can use it to craft.
+
+But to craft, I need a table.
+
+So, I think PLACE_TABLE is the action.
+
+Action number 8.
+
+The problem says: "You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number."
+
+So, I should output the number.
+
+But let's see if there's a better move.
+
+Another thing: I see water at (2,-4) to (5,-4), but water is for drinking, and I have drink:9,
+Time is up.
+
+Given the time I've spent and the approaches I've tried, I should stop thinking and formulate a final answer based on what I already have.
+</think>
+
+Action: 8 (PLACE_TABLE)  
+
+**Reasoning:** I have 1 Wood in my inventory, which is the first resource needed to craft tools and progress. To start crafting, I need a crafting table. Since I'm at (0,0) on grass (a valid surface for placement), placing the table here (action 8) is the logical next step. This aligns with the game progression examples where having wood leads to placing a table to craft a wood pickaxe for mining. I don't need to move first—my current position is ideal for this action. All intrinsics are healthy (health, food, drink,
+
+State:
+
+<|im_start|>system
+You are playing Craftax.
+
+Craftax is a game about exploring dungeons, mining, crafting and fighting enemies. The player can move in the four cardinal directions and can interact. Interacting can cause the player to attempt to mine (a block), attack (a creature), drink (water or from a fountain), eat (fruit) or open a chest. This interaction will only happen if the block/creature/chest is directly in front of the player, one step in the direction the player is facing. 
+The player has 5 'intrinsics': health, hunger, thirst, energy and mana (magical energy). Hunger, thirst and energy will naturally decrease and must be replenished by eating, drinking and sleeping respectively. Mana is used for casting spells or enchanting items and will naturally recover. Health will recover when hunger, thirst and energy are non-zero and will decrease if any of these are 0. If the players health falls beneath 0 they will die and the game will restart.
+
+IMPORTANT: To progress through the game the player needs to find the ladder on each floor, which can be used to descend to the next level. Each floor possesses unique challenges and creatures, increasing in difficulty until the final boss level. The ladders begin closed and the player must kill 8 creatures on each level to open up the respective ladders (with the exception of the overworld). There are 9 levels in total.
+
+Here is a rough outline of an example progression of this game:
+- Gather wood from nearby trees to build a crafting table and then wood tools
+- Find and mine stones to make stone tools or place as a furnace or stone
+- Use your tools to mine iron ore and coal to use for building iron tools and armor, and make sure to collect extra coal and wood to use as torches later in the game
+- The ladder is always open on the overworld, but once you have iron tools and torches you should be ready to descend. Traverse the overworld looking for the ladder and descend.
+- Continue killing creatures, then finding and descending down ladders
+
+Make sure to stay healthy during this process, killing cows (or that level's equivalent peaceful animal), drinking water, and resting enough to keep the intrinsics above 0. 
+
+Actions available: 
+0:NOOP, 1:LEFT, 2:RIGHT, 3:UP, 4:DOWN, 5:DO (interact/mine/attack), 6:SLEEP, 7:PLACE_STONE,
+8:PLACE_TABLE, 9:PLACE_FURNACE, 10:PLACE_PLANT, 11:MAKE_WOOD_PICKAXE, 12:MAKE_STONE_PICKAXE,
+13:MAKE_IRON_PICKAXE, 14:MAKE_WOOD_SWORD, 15:MAKE_STONE_SWORD, 16:MAKE_IRON_SWORD, 17:REST,
+18:DESCEND, 19:ASCEND, 20:MAKE_DIAMOND_PICKAXE, 21:MAKE_DIAMOND_SWORD, 22:MAKE_IRON_ARMOUR,
+23:MAKE_DIAMOND_ARMOUR, 24:SHOOT_ARROW, 25:MAKE_ARROW, 26:CAST_FIREBALL, 27:CAST_ICEBALL,
+28:PLACE_TORCH, 29-34:DRINK_POTION_(RED/GREEN/BLUE/PINK/CYAN/YELLOW), 35:READ_BOOK,
+36:ENCHANT_SWORD, 37:ENCHANT_ARMOUR, 38:MAKE_TORCH, 39-41:LEVEL_UP_(DEX/STR/INT), 42:ENCHANT_BOW<|im_end|>
+<|im_start|>user
+Below are examples of good gameplay decisions. These are EXAMPLES ONLY, not your actual game history:
+
+
+--- EXAMPLE 1: Moving to gather wood from a tree ---
+Game State:
+Map: -5,-4:grass, -4,-4:grass, -3,-4:grass, -2,-4:grass, -1,-4:grass, 0,-4:grass, 1,-4:grass, 2,-4:sand, 3,-4:sand, 4,-4:grass, 5,-4:sand, -5,-3:tree, -4,-3:grass, -3,-3:grass, -2,-3:grass, -1,-3:grass, 0,-3:grass, 1,-3:stone, 2,-3:grass, 3,-3:grass, 4,-3:grass, 5,-3:grass, -5,-2:grass, -4,-2:grass, -3,-2:grass, -2,-2:grass, -1,-2:grass, 0,-2:grass, 1,-2:grass, 2,-2:grass, 3,-2:grass, 4,-2:grass, 5,-2:grass, -5,-1:grass, -4,-1:grass, -3,-1:grass, -2,-1:grass, -1,-1:grass, 0,-1:grass, 1,-1:grass, 2,-1:grass, 3,-1:grass, 4,-1:grass, 5,-1:grass, -5,0:grass, -4,0:grass, -3,0:grass, -2,0:grass, -1,0:grass, 0,0:grass, 1,0:grass, 2,0:grass, 3,0:grass, 4,0:grass, 5,0:grass, -5,1:grass, -4,1:grass, -3,1:grass, -2,1:grass, -1,1:grass, 0,1:Cow on grass, 1,1:grass, 2,1:grass, 3,1:grass, 4,1:grass, 5,1:grass, -5,2:grass, -4,2:grass, -3,2:tree, -2,2:grass, -1,2:Cow on grass, 0,2:sand, 1,2:grass, 2,2:grass, 3,2:grass, 4,2:grass, 5,2:grass, -5,3:tree, -4,3:grass, -3,3:grass, -2,3:tree, -1,3:sand, 0,3:sand, 1,3:sand, 2,3:grass, 3,3:grass, 4,3:grass, 5,3:grass, -5,4:grass, -4,4:grass, -3,4:grass, -2,4:grass, -1,4:sand, 0,4:sand, 1,4:sand, 2,4:sand, 3,4:grass, 4,4:grass, 5,4:grass
+Inventory: Wood:0, Stone:0, Coal:0, Iron:0, Diamond:0, Sapphire:0, Ruby:0, Sapling:0, Torch:0, Arrow:0, Book:0, Red potion:0, Green potion:0, Blue potion:0, Pink potion:0, Cyan potion:0, Yellow potion:0, Health:9.0, Food:9, Drink:9, Energy:9, Mana:9, XP:0, Dexterity:1, Strength:1, Intelligence:1, Direction:left, Light:0.906, Is Sleeping:False, Is Resting:False, Learned Fireball:False, Learned Iceball:False, Floor:0, Ladder Open:True, Is Boss Vulnerable:False
+Good reasoning: "My inventory has 0 Wood, which is the first resource I need to start crafting. I see a tree located at (-3, 2). I am currently at (0, 0). Thus the tree is 3 steps left and 2 steps down. What is one step to my left? (-1, 0) is grass. Ok, so I should step left to get closer to the tree."
+Good action: 1 (LEFT)
+
+--- EXAMPLE 2: Escaping from a zombie when health is low ---
+Game State:
+Map: -5,-4:grass, -4,-4:grass, -3,-4:grass, -2,-4:grass, -1,-4:grass, 0,-4:grass, 1,-4:grass, 2,-4:sand, 3,-4:sand, 4,-4:grass, 5,-4:sand, -5,-3:grass, -4,-3:grass, -3,-3:grass, -2,-3:grass, -1,-3:grass, 0,-3:grass, 1,-3:stone, 2,-3:grass, 3,-3:grass, 4,-3:grass, 5,-3:grass, -5,-2:grass, -4,-2:grass, -3,-2:grass, -2,-2:grass, -1,-2:grass, 0,-2:grass, 1,-2:grass, 2,-2:grass, 3,-2:grass, 4,-2:grass, 5,-2:grass, -5,-1:grass, -4,-1:grass, -3,-1:grass, -2,-1:grass, -1,-1:grass, 0,-1:grass, 1,-1:grass, 2,-1:grass, 3,-1:grass, 4,-1:grass, 5,-1:grass, -5,0:grass, -4,0:grass, -3,0:grass, -2,0:grass, -1,0:grass, 0,0:grass, 1,0:grass, 2,0:grass, 3,0:grass, 4,0:grass, 5,0:grass, -5,1:grass, -4,1:grass, -3,1:grass, -2,1:grass, -1,1:grass, 0,1:Zombie on grass, 1,1:grass, 2,1:grass, 3,1:grass, 4,1:grass, 5,1:grass, -5,2:grass, -4,2:grass, -3,2:grass, -2,2:grass, -1,2:grass, 0,2:grass, 1,2:grass, 2,2:grass, 3,2:grass, 4,2:grass, 5,2:grass, -5,3:grass, -4,3:grass, -3,3:grass, -2,3:grass, -1,3:grass, 0,3:grass, 1,3:grass, 2,3:grass, 3,3:grass, 4,3:grass, 5,3:grass, -5,4:grass, -4,4:grass, -3,4:grass, -2,4:grass, -1,4:grass, 0,4:grass, 1,4:grass, 2,4:grass, 3,4:grass, 4,4:grass, 5,4:grass
+Inventory: Wood:1, Stone:0, Coal:0, Iron:0, Diamond:0, Sapphire:0, Ruby:0, Sapling:0, Torch:0, Arrow:0, Book:0, Red potion:0, Green potion:0, Blue potion:0, Pink potion:0, Cyan potion:0, Yellow potion:0, Health:3.0, Food:8, Drink:8, Energy:9, Mana:9, XP:0, Dexterity:1, Strength:1, Intelligence:1, Direction:left, Light:0.922, Is Sleeping:False, Is Resting:False, Learned Fireball:False, Learned Iceball:False, Floor:0, Ladder Open:True, Is Boss Vulnerable:False
+Good reasoning: "My health is very low (3.0), so I am in danger of dying. There is a Zombie at (0, 1), which is directly below me. I am at (0, 0). The zombie is adjacent and dangerous. If I fight with only 3 health, I might die. I should escape. Looking around: (0, -1) is grass above me, (-1, 0) is grass to my left, (1, 0) is grass to my right. I should move away from the zombie. Going left (action 1) will take me to (-1, 0) which is grass and away from danger."
+Good action: 1 (LEFT)
+
+--- EXAMPLE 3: Placing a crafting table to begin tool progression ---
+Game State:
+Map: -5,-4:grass, -4,-4:grass, -3,-4:grass, -2,-4:grass, -1,-4:grass, 0,-4:grass, 1,-4:grass, 2,-4:sand, 3,-4:sand, 4,-4:grass, 5,-4:sand, -5,-3:tree, -4,-3:grass, -3,-3:grass, -2,-3:grass, -1,-3:grass, 0,-3:grass, 1,-3:stone, 2,-3:grass, 3,-3:grass, 4,-3:grass, 5,-3:grass, -5,-2:grass, -4,-2:grass, -3,-2:grass, -2,-2:grass, -1,-2:grass, 0,-2:grass, 1,-2:grass, 2,-2:grass, 3,-2:grass, 4,-2:grass, 5,-2:grass, -5,-1:grass, -4,-1:grass, -3,-1:grass, -2,-1:grass, -1,-1:grass, 0,-1:grass, 1,-1:grass, 2,-1:grass, 3,-1:grass, 4,-1:grass, 5,-1:grass, -5,0:grass, -4,0:grass, -3,0:grass, -2,0:grass, -1,0:grass, 0,0:grass, 1,0:grass, 2,0:grass, 3,0:grass, 4,0:grass, 5,0:grass, -5,1:grass, -4,1:grass, -3,1:grass, -2,1:grass, -1,1:Cow on grass, 0,1:grass, 1,1:grass, 2,1:grass, 3,1:grass, 4,1:grass, 5,1:grass, -5,2:grass, -4,2:grass, -3,2:tree, -2,2:tree, -1,2:grass, 0,2:Cow on sand, 1,2:grass, 2,2:grass, 3,2:grass, 4,2:grass, 5,2:grass, -5,3:tree, -4,3:grass, -3,3:grass, -2,3:tree, -1,3:sand, 0,3:sand, 1,3:sand, 2,3:grass, 3,3:grass, 4,3:grass, 5,3:grass, -5,4:grass, -4,4:grass, -3,4:grass, -2,4:grass, -1,4:sand, 0,4:sand, 1,4:sand, 2,4:sand, 3,4:grass, 4,4:grass, 5,4:grass
+Inventory: Wood:1, Stone:0, Coal:0, Iron:0, Diamond:0, Sapphire:0, Ruby:0, Sapling:0, Torch:0, Arrow:0, Book:0, Red potion:0, Green potion:0, Blue potion:0, Pink potion:0, Cyan potion:0, Yellow potion:0, Health:9.0, Food:9, Drink:9, Energy:9, Mana:9, XP:0, Dexterity:1, Strength:1, Intelligence:1, Direction:up, Light:0.927, Is Sleeping:False, Is Resting:False, Learned Fireball:False, Learned Iceball:False, Floor:0, Ladder Open:True, Is Boss Vulnerable:False
+Good reasoning: "I have 1 Wood in my inventory. Looking at my current position (0, 0), I can see there's a stone at (1, -3) and cows nearby at (-1, 1) and (0, 2). I have enough wood now to place a crafting table. This is the first step in the progression: place table → craft wood pickaxe → mine stone → make stone tools. I should place a crafting table here. Action 8 is PLACE_TABLE."
+Good action: 8 (PLACE_TABLE)
+
+--- END OF EXAMPLES ---
+
+
+Now here is YOUR CURRENT game state:
+Map:
+-5, -4: grass
+-4, -4: grass
+-3, -4: sand
+-2, -4: sand
+-1, -4: grass
+0, -4: sand
+1, -4: sand
+2, -4: water
+3, -4: water
+4, -4: water
+5, -4: water
+-5, -3: grass
+-4, -3: stone
+-3, -3: grass
+-2, -3: grass
+-1, -3: grass
+0, -3: grass
+1, -3: grass
+2, -3: grass
+3, -3: sand
+4, -3: water
+5, -3: water
+-5, -2: grass
+-4, -2: grass
+-3, -2: grass
+-2, -2: grass
+-1, -2: grass
+0, -2: grass
+1, -2: grass
+2, -2: grass
+3, -2: grass
+4, -2: sand
+5, -2: sand
+-5, -1: grass
+-4, -1: grass
+-3, -1: grass
+-2, -1: grass
+-1, -1: grass
+0, -1: grass
+1, -1: grass
+2, -1: grass
+3, -1: grass
+4, -1: grass
+5, -1: sand
+-5, 0: Cow on grass
+-4, 0: grass
+-3, 0: grass
+-2, 0: grass
+-1, 0: grass
+0, 0: grass
+1, 0: grass
+2, 0: grass
+3, 0: grass
+4, 0: grass
+5, 0: grass
+-5, 1: grass
+-4, 1: grass
+-3, 1: grass
+-2, 1: grass
+-1, 1: grass
+0, 1: grass
+1, 1: grass
+2, 1: tree
+3, 1: tree
+4, 1: grass
+5, 1: grass
+-5, 2: sand
+-4, 2: grass
+-3, 2: grass
+-2, 2: grass
+-1, 2: grass
+0, 2: grass
+1, 2: grass
+2, 2: grass
+3, 2: grass
+4, 2: grass
+5, 2: grass
+-5, 3: sand
+-4, 3: sand
+-3, 3: grass
+-2, 3: grass
+-1, 3: grass
+0, 3: grass
+1, 3: grass
+2, 3: grass
+3, 3: grass
+4, 3: grass
+5, 3: grass
+-5, 4: sand
+-4, 4: sand
+-3, 4: sand
+-2, 4: grass
+-1, 4: grass
+0, 4: grass
+1, 4: grass
+2, 4: grass
+3, 4: grass
+4, 4: grass
+5, 4: grass
+
+Inventory:
+Wood: 1
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: right
+Light: 0.9005566835403442
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+
+You are at (0,0); pick an action. Think about the scene briefly, enough to pick a move and then say the number.<|im_end|>
+<|im_start|>assistant
+<think>
