@@ -16,10 +16,16 @@ import argparse
 import os
 import sys
 
-# GPU memory sharing between JAX and vLLM
-# JAX uses XLA allocator, vLLM uses PyTorch/CUDA - they can coexist
+# GPU memory sharing: JAX (XLA) and vLLM (PyTorch/CUDA) can coexist on the
+# same GPU. Key settings to avoid conflicts:
+#   - Disable JAX CUDA command buffers (CUDA graphs): they share a limited pool
+#     with vLLM's graphs and cause "command buffer OOM" errors at instantiation.
+#   - Don't preallocate: let JAX allocate on demand, vLLM already holds 60%.
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.3"  # JAX gets 30%, vLLM manages rest
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.3"  # JAX gets 30%, vLLM gets 60%
+# Disable CUDA command buffers so JAX doesn't compete with vLLM's CUDA graphs.
+# Without this, JAX tries to instantiate CUDA graphs that OOM against vLLM's pool.
+os.environ.setdefault("XLA_FLAGS", "--xla_gpu_enable_command_buffer=")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # Add parent directory to path for imports
@@ -431,15 +437,20 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     tx = optax.chain(optax.clip_by_global_norm(config["MAX_GRAD_NORM"]), optax.adam(learning_rate=linear_schedule, eps=1e-5))
     train_state = TrainState.create(apply_fn=network.apply, params=network_params, tx=tx)
 
+    print("Creating JIT-compiled training functions...", flush=True)
     _env_step, _ppo_update = make_train_with_llm(config, network, env, env_params)
+    print("  Done.", flush=True)
 
+    print("Resetting environment...", flush=True)
     rng, reset_rng = jax.random.split(rng)
     obs, env_state = env.reset(reset_rng, env_params)
     hidden_states = jnp.zeros((num_envs, llm_manager.hidden_size))
+    print("  Done.", flush=True)
 
     total_steps, llm_calls, episode_returns = 0, 0, []
     steps_since_llm = skip_n  # Force LLM on first iter
     start_time = time.perf_counter()
+    print("Starting training loop...", flush=True)
     last_log_time, last_log_steps = start_time, 0
 
     for update_idx in range(config["NUM_UPDATES"]):
@@ -457,7 +468,11 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
             steps_this_chunk = max(1, steps_this_chunk)
 
             carry = (train_state, env_state, obs, hidden_states, rng)
+            if update_idx == 0 and steps_collected == 0:
+                print(f"  First scan ({steps_this_chunk} steps)...", flush=True)
             carry, traj_chunk = jax.lax.scan(_env_step, carry, None, steps_this_chunk)
+            if update_idx == 0 and steps_collected == 0:
+                print(f"  First scan complete.", flush=True)
             train_state, env_state, obs, hidden_states, rng = carry
 
             all_transitions.append(traj_chunk)
