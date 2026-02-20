@@ -50,11 +50,11 @@ def main():
     # Configuration Constants
     if args.symbolic:
         BASE_DATA_DIR = "/data/group_data/rl/geney/craftax_unlabelled_symbolic/"
-        RESULTS_DIR = "/data/group_data/rl/geney/craftax_llm_labelled_results/"
+        RESULTS_DIR = "/data/group_data/rl/geney/vllm_craftax_labelled_results/"
     else:
         # Fallback to original directory structure
         BASE_DATA_DIR = "/data/group_data/rl/geney/craftax_unlabelled_new/"
-        RESULTS_DIR = "/data/group_data/rl/geney/craftax_llm_labelled_results/"
+        RESULTS_DIR = "/data/group_data/rl/geney/vllm_craftax_labelled_results/"
     
     FILE_PATTERN = "trajectories_batch_*.npz"
 

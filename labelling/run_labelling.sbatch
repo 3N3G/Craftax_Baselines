@@ -6,7 +6,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=72:00:00
+#SBATCH --time=2-00:00:00
 
 ###############################################################################
 # UNIFIED OFFLINE LABELLING SCRIPT
@@ -24,10 +24,10 @@
 #   sbatch labelling/run_labelling.sbatch
 #
 # To check progress:
-#   ls /data/group_data/rl/geney/craftax_llm_labelled_results/*.npz | wc -l
+#   ls /data/group_data/rl/geney/vllm_craftax_labelled_results/*.npz | wc -l
 #
 # Optional environment variables (set before sbatch or in script):
-#   RESULTS_DIR - Where to save results (default: /data/group_data/rl/geney/craftax_llm_labelled_results)
+#   RESULTS_DIR - Where to save results (default: /data/group_data/rl/geney/vllm_craftax_labelled_results)
 #   SOURCE_DIR  - Where to find input files (default: /data/group_data/rl/geney/craftax_unlabelled_symbolic)
 #   NUM_WORKERS - Number of GPU workers to spawn (default: 16)
 ###############################################################################
@@ -37,7 +37,7 @@ set -e
 # =============================================================================
 # CONFIGURATION - Edit these or override via environment variables
 # =============================================================================
-RESULTS_DIR="${RESULTS_DIR:-/data/group_data/rl/geney/new_craftax_llm_labelled_results}"
+RESULTS_DIR="${RESULTS_DIR:-/data/group_data/rl/geney/vllm_craftax_labelled_results}"
 SOURCE_DIR="${SOURCE_DIR:-/data/group_data/rl/geney/craftax_unlabelled_symbolic}"
 NUM_WORKERS="${NUM_WORKERS:-16}"
 
@@ -66,7 +66,7 @@ echo "=========================================="
 echo ""
 echo "[1/6] Setting up environment..."
 source ~/.bashrc
-conda activate /data/user_data/geney/.conda/envs/imaug
+conda activate /data/user_data/geney/.conda/envs/craftax_fast_llm
 
 # Create directories if needed
 mkdir -p "$RESULTS_DIR"
@@ -109,7 +109,7 @@ cd "$BASELINES_DIR/labelling"
 python addtoqueue_llm.py --host $(hostname) --symbolic --queue "$QUEUE_NAME"
 
 # Get queue size
-QUEUE_SIZE=$(redis-cli -h $(hostname) -p $REDIS_PORT LLEN "$QUEUE_NAME")
+QUEUE_SIZE=$($REDIS_DIR/src/redis-cli -h $(hostname) -p $REDIS_PORT LLEN "$QUEUE_NAME")
 echo "Queued $QUEUE_SIZE jobs"
 
 if [ "$QUEUE_SIZE" -eq 0 ]; then
@@ -117,7 +117,7 @@ if [ "$QUEUE_SIZE" -eq 0 ]; then
     echo "=========================================="
     echo "ALL FILES ALREADY COMPLETED!"
     echo "=========================================="
-    redis-cli -h $(hostname) -p $REDIS_PORT SHUTDOWN NOSAVE || true
+    $REDIS_DIR/src/redis-cli -h $(hostname) -p $REDIS_PORT SHUTDOWN NOSAVE || true
     exit 0
 fi
 
@@ -136,44 +136,106 @@ WORKER_JOB_ID=$(sbatch --parsable --array=1-${ACTUAL_WORKERS} "$BASELINES_DIR/la
 echo "  Submitted worker array job: $WORKER_JOB_ID"
 
 # =============================================================================
-# STEP 5: Monitor until complete
+# STEP 5: Monitor, detect lost jobs, re-queue, repeat
 # =============================================================================
 echo ""
-echo "[5/6] Monitoring progress..."
+echo "[5/6] Monitoring progress (with automatic re-queue on worker failure)..."
 echo "Queue will be checked every 60 seconds"
-echo "Will wait for all workers to finish after queue empties"
 echo ""
 
-ZERO_COUNT=0
-ZERO_WAIT_CYCLES=10  # Wait 10 more minutes after queue empties
+SOURCE_COUNT=$(ls "$SOURCE_DIR"/*.npz 2>/dev/null | wc -l)
+ROUND=1
 
 while true; do
-    REMAINING=$(redis-cli -h $(hostname) -p $REDIS_PORT LLEN "$QUEUE_NAME")
-    COMPLETED=$(ls "$RESULTS_DIR"/*.npz 2>/dev/null | wc -l)
-    
-    # Check if any workers are still running
-    ACTIVE_WORKERS=$(squeue -u $USER -n llm_worker -h 2>/dev/null | wc -l)
-    
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Queue=$REMAINING | Completed=$COMPLETED | Workers=$ACTIVE_WORKERS"
-    
-    if [ "$REMAINING" -eq 0 ]; then
-        ZERO_COUNT=$((ZERO_COUNT + 1))
-        
-        if [ "$ACTIVE_WORKERS" -eq 0 ]; then
+    # --- Inner monitoring loop: wait for queue to drain and workers to finish ---
+    ZERO_COUNT=0
+    while true; do
+        REMAINING=$($REDIS_DIR/src/redis-cli -h $(hostname) -p $REDIS_PORT LLEN "$QUEUE_NAME")
+        COMPLETED=$(ls "$RESULTS_DIR"/*.npz 2>/dev/null | wc -l)
+        ACTIVE_WORKERS=$(squeue -u $USER -n llm_worker -h 2>/dev/null | wc -l)
+
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [Round $ROUND]: Queue=$REMAINING | Completed=$COMPLETED/$SOURCE_COUNT | Workers=$ACTIVE_WORKERS"
+
+        if [ "$REMAINING" -eq 0 ] && [ "$ACTIVE_WORKERS" -eq 0 ]; then
             echo ""
-            echo "All jobs completed and all workers finished!"
+            echo "Queue empty and all workers finished."
             break
         fi
-        
-        if [ "$ZERO_COUNT" -ge "$ZERO_WAIT_CYCLES" ]; then
-            echo "WARNING: Queue empty for $ZERO_COUNT cycles but $ACTIVE_WORKERS workers still running"
-            echo "         Workers may be processing their final jobs..."
+
+        if [ "$REMAINING" -eq 0 ]; then
+            ZERO_COUNT=$((ZERO_COUNT + 1))
+            if [ "$ZERO_COUNT" -ge 5 ] && [ "$ACTIVE_WORKERS" -gt 0 ]; then
+                echo "  (Queue empty for ${ZERO_COUNT}min, $ACTIVE_WORKERS workers still processing...)"
+            fi
+        else
+            ZERO_COUNT=0
         fi
-    else
-        ZERO_COUNT=0
+
+        sleep 60
+    done
+
+    # --- Check: are we done? ---
+    COMPLETED=$(ls "$RESULTS_DIR"/*.npz 2>/dev/null | wc -l)
+    if [ "$COMPLETED" -ge "$SOURCE_COUNT" ]; then
+        echo ""
+        echo "✓ All $SOURCE_COUNT files completed!"
+        break
     fi
-    
-    sleep 60
+
+    # --- Find missing jobs and re-queue ---
+    MISSING=$((SOURCE_COUNT - COMPLETED))
+    echo ""
+    echo "=========================================="
+    echo "INCOMPLETE: $COMPLETED/$SOURCE_COUNT done ($MISSING missing)"
+    echo "Re-queuing missing jobs (Round $((ROUND + 1)))..."
+    echo "=========================================="
+
+    # Clean up stale progress files from dead workers
+    if [ -d "$RESULTS_DIR/progress" ]; then
+        STALE_PROGRESS=$(ls "$RESULTS_DIR/progress"/*.json 2>/dev/null | wc -l)
+        if [ "$STALE_PROGRESS" -gt 0 ]; then
+            echo "  Cleaning $STALE_PROGRESS stale progress files..."
+            rm -f "$RESULTS_DIR/progress"/*.json
+        fi
+    fi
+    if [ -d "$RESULTS_DIR/temp_npy" ]; then
+        STALE_TEMPS=$(ls "$RESULTS_DIR/temp_npy"/*.npy 2>/dev/null | wc -l)
+        if [ "$STALE_TEMPS" -gt 0 ]; then
+            echo "  Cleaning $STALE_TEMPS stale temp files..."
+            rm -f "$RESULTS_DIR/temp_npy"/*.npy
+        fi
+    fi
+
+    # Clear queue and re-add only missing files
+    $REDIS_DIR/src/redis-cli -h $(hostname) -p $REDIS_PORT DEL "$QUEUE_NAME" > /dev/null
+
+    # Get list of completed basenames
+    COMPLETED_SET=$(ls "$RESULTS_DIR"/*.npz 2>/dev/null | xargs -I{} basename {})
+
+    # Re-queue source files that don't have a completed output
+    REQUEUED=0
+    for src_file in "$SOURCE_DIR"/*.npz; do
+        base=$(basename "$src_file")
+        if ! echo "$COMPLETED_SET" | grep -qx "$base"; then
+            $REDIS_DIR/src/redis-cli -h $(hostname) -p $REDIS_PORT LPUSH "$QUEUE_NAME" "$src_file" > /dev/null
+            REQUEUED=$((REQUEUED + 1))
+        fi
+    done
+    echo "  Re-queued $REQUEUED jobs"
+
+    if [ "$REQUEUED" -eq 0 ]; then
+        echo "  Nothing to re-queue — all files present!"
+        break
+    fi
+
+    # Spawn new workers
+    NEW_WORKERS=$((REQUEUED < NUM_WORKERS ? REQUEUED : NUM_WORKERS))
+    echo "  Spawning $NEW_WORKERS new workers..."
+    WORKER_JOB_ID=$(sbatch --parsable --array=1-${NEW_WORKERS} "$BASELINES_DIR/labelling/makeworkers_llm.sbatch")
+    echo "  Submitted worker array job: $WORKER_JOB_ID"
+
+    ROUND=$((ROUND + 1))
+    echo ""
 done
 
 # =============================================================================
@@ -182,11 +244,10 @@ done
 echo ""
 echo "[6/6] Cleanup..."
 
-redis-cli -h $(hostname) -p $REDIS_PORT SHUTDOWN NOSAVE || true
+$REDIS_DIR/src/redis-cli -h $(hostname) -p $REDIS_PORT SHUTDOWN NOSAVE || true
 
 # Final count
 FINAL_COUNT=$(ls "$RESULTS_DIR"/*.npz 2>/dev/null | wc -l)
-SOURCE_COUNT=$(ls "$SOURCE_DIR"/*.npz 2>/dev/null | wc -l)
 
 echo ""
 echo "=========================================="
@@ -195,7 +256,8 @@ echo "=========================================="
 echo "Date: $(date)"
 echo "Total source files: $SOURCE_COUNT"
 echo "Total completed: $FINAL_COUNT"
-if [ "$FINAL_COUNT" -eq "$SOURCE_COUNT" ]; then
+echo "Rounds needed: $ROUND"
+if [ "$FINAL_COUNT" -ge "$SOURCE_COUNT" ]; then
     echo "Status: ALL FILES PROCESSED ✓"
 else
     MISSING=$((SOURCE_COUNT - FINAL_COUNT))
@@ -218,3 +280,4 @@ else:
     print('✗ WARNING: Hidden states missing!')
 "
 fi
+

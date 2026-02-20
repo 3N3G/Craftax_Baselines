@@ -49,7 +49,7 @@ MODEL_ID = "Qwen/Qwen3-4B-Thinking-2507"
 
 # MUST MATCH llm_worker.py / online_rl_hidden.py exactly!
 TOKENS_GENERATED = 256  # Same as other scripts
-MAX_SEQ_LEN = 2560  # Prompt (~1500-2000) + Generated (256)
+MAX_SEQ_LEN = 8448  # Prompt (up to ~8192) + Generated (256); was 2560 which truncated observations
 
 # Memory: Batch 16 works - tested previously
 BATCH_SIZE = 16

@@ -302,3 +302,87 @@ class ActorCriticConvImAug(nn.Module):
         )
 
         return pi, jnp.squeeze(critic, axis=-1)
+
+
+class ActorCriticAug(nn.Module):
+    """Symbolic MLP encoder + LLM hidden state augmentation.
+    
+    Architecture matches ActorCritic's MLP encoder, but concatenates
+    the LLM hidden state embedding before the actor/critic heads.
+    This is the symbolic observation equivalent of ActorCriticConvImAug.
+    
+    Args:
+        action_dim: Number of discrete actions
+        layer_width: Width of MLP layers (default 512)
+        hidden_state_dim: Dimension of LLM hidden states (default 2560 for Qwen)
+    """
+    action_dim: Sequence[int]
+    layer_width: int = 512
+    hidden_state_dim: int = 2560
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, obs, hidden_state):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        # MLP encoder for symbolic observation (same as ActorCritic)
+        embedding = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(obs)
+        embedding = activation(embedding)
+
+        embedding = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(embedding)
+        embedding = activation(embedding)
+
+        embedding = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(embedding)
+        embedding = activation(embedding)
+
+        # Concatenate with LLM hidden state
+        combined = jnp.concatenate([embedding, hidden_state], axis=-1)
+
+        # Actor head on combined embedding
+        actor_mean = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(combined)
+        actor_mean = activation(actor_mean)
+
+        actor_mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
+        # Critic head on combined embedding
+        critic = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(combined)
+        critic = activation(critic)
+
+        critic = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(critic)
+        critic = activation(critic)
+
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            critic
+        )
+
+        return pi, jnp.squeeze(critic, axis=-1)

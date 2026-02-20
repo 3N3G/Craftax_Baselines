@@ -18,7 +18,7 @@ import json
 from datetime import datetime
 
 # Directories
-RESULTS_DIR = "/data/group_data/rl/geney/craftax_llm_labelled_results/"
+RESULTS_DIR = "/data/group_data/rl/geney/vllm_craftax_labelled_results/"
 PROGRESS_DIR = os.path.join(RESULTS_DIR, "progress")
 TEMP_NPY_DIR = os.path.join(RESULTS_DIR, "temp_npy")
 UNLABELLED_DIR = "/data/group_data/rl/geney/craftax_unlabelled_symbolic/"

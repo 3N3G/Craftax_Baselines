@@ -6,6 +6,12 @@ logs/
 eval_videos*/
 core.*
 
+# Model weight symlinks (point to machine-specific HF cache paths)
+vllm_hidden_qwen4b/*.safetensors
+
+# Generated analysis outputs
+analysis/results/
+
 play_data
 
 # Byte-compiled / optimized / DLL files

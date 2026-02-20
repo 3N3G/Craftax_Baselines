@@ -80,4 +80,9 @@ def batch_log(update_step, log, config):
                 sps = steps_between_updates / dt
                 agg_logs["sps"] = sps
 
-        wandb.log(agg_logs)
+        # Add timestep for consistent x-axis with online_rl_hidden.py
+        if "timestep" in batch_logs[update_step][0]:
+            timestep = int(batch_logs[update_step][0]["timestep"])
+            wandb.log(agg_logs, step=timestep)
+        else:
+            wandb.log(agg_logs)
