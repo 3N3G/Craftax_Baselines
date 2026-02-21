@@ -7,12 +7,13 @@ set -euo pipefail
 
 ENVS="${ENVS:-8}"
 TIMESTEPS="${TIMESTEPS:-1e8}"
+NUM_STEPS="${NUM_STEPS:-125}"
 LAYER="${LAYER:--1}"
 TOKENS="${TOKENS:-1}"
 SKIPS=(1 5 25 125)
 
 echo "Submitting online_rl_hidden_jax sweep"
-echo "  envs=${ENVS} timesteps=${TIMESTEPS} layer=${LAYER} tokens=${TOKENS}"
+echo "  envs=${ENVS} timesteps=${TIMESTEPS} num_steps=${NUM_STEPS} layer=${LAYER} tokens=${TOKENS}"
 echo "  skips=${SKIPS[*]}"
 echo ""
 
@@ -26,7 +27,7 @@ for skip in "${SKIPS[@]}"; do
             --output="${out_log}" \
             --error="${err_log}" \
             scripts/sbatch/run_online_rl_hidden_jax.sbatch \
-            "${ENVS}" "${TIMESTEPS}" "${skip}" "${LAYER}" "${TOKENS}"
+            "${ENVS}" "${TIMESTEPS}" "${skip}" "${LAYER}" "${TOKENS}" "${NUM_STEPS}"
     )
     job_id="$(echo "${submit_out}" | awk '{print $4}')"
     echo "skip=${skip} job_id=${job_id} name=${job_name}"

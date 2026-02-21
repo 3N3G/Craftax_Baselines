@@ -60,6 +60,7 @@ TIMESTEPS=${2:-1000000}
 SKIP_N=${3:-1}
 LAYER=${4:--1}  # Which layer to extract (-1 for last available)
 TOKENS=${5:-1}  # How many tokens to generate (1 for prompt-only)
+NUM_STEPS=${6:-64}
 
 echo "========================================"
 echo "Online RL with vLLM Hidden States (JAX)"
@@ -72,6 +73,7 @@ echo "========================================"
 echo "Environments: $ENVS"
 echo "Timesteps: $TIMESTEPS"
 echo "Skip-N: $SKIP_N (LLM inference every $SKIP_N steps)"
+echo "Num-steps/update: $NUM_STEPS"
 echo "Extract layer: $LAYER"
 echo "Tokens to generate: $TOKENS"
 echo ""
@@ -136,6 +138,7 @@ python -u online_rl_llm/online_rl_hidden_jax.py \
     --envs $ENVS \
     --timesteps $TIMESTEPS \
     --skip-n $SKIP_N \
+    --num-steps $NUM_STEPS \
     --layer $LAYER \
     --tokens $TOKENS \
     --wandb-project craftax-online-rl-llm \
