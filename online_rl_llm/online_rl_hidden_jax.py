@@ -117,6 +117,48 @@ class TransitionAug(NamedTuple):
     info: dict
 
 
+def _extract_episode_metrics(traj_info: dict) -> Dict[str, float]:
+    """Compute completed-episode aggregate metrics from traj info."""
+    metrics: Dict[str, float] = {}
+    done = traj_info["returned_episode"]
+    completed = float(jax.device_get(jnp.sum(done)))
+    metrics["train/completed_episodes"] = completed
+    if completed <= 0:
+        return metrics
+
+    metrics["train/episode_return"] = float(
+        jax.device_get(jnp.sum(traj_info["returned_episode_returns"] * done) / completed)
+    )
+    metrics["train/episode_length"] = float(
+        jax.device_get(jnp.sum(traj_info["returned_episode_lengths"] * done) / completed)
+    )
+    return metrics
+
+
+def _extract_achievement_metrics(log_env_state, num_envs: int) -> Dict[str, float]:
+    """Compute total and per-achievement unlock metrics from current env state."""
+    metrics: Dict[str, float] = {}
+    try:
+        achievements = log_env_state.env_state.achievements  # (num_envs, num_achievements)
+        any_unlocked = jnp.any(achievements, axis=0)
+        total_unique = jnp.sum(any_unlocked)
+        total_unlocks = jnp.sum(achievements)
+        metrics["achievements/total_unique"] = float(jax.device_get(total_unique))
+        metrics["achievements/total_unlocks"] = float(jax.device_get(total_unlocks))
+
+        unlocked_frac = jnp.mean(achievements.astype(jnp.float32), axis=0)
+        unlocked_frac_np = np.asarray(jax.device_get(unlocked_frac))
+        for idx, ach in enumerate(Achievement):
+            if idx >= unlocked_frac_np.shape[0]:
+                break
+            ach_name = ach.name.lower().replace(" ", "_")
+            metrics[f"achievements/{ach_name}_unlock_rate"] = float(unlocked_frac_np[idx])
+    except Exception:
+        # Keep training robust even if env internals differ.
+        pass
+    return metrics
+
+
 # =============================================================================
 # Text Observation Processing
 # =============================================================================
@@ -388,11 +430,24 @@ def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use
         current_time = time.perf_counter()
         if (update_idx + 1) % 10 == 0:
             sps = (total_steps - last_log_steps) / (current_time - last_log_time)
-            mean_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+            episode_metrics = _extract_episode_metrics(traj_batch.info)
+            achievement_metrics = _extract_achievement_metrics(env_state, num_envs)
+            mean_return = episode_metrics.get("train/episode_return", 0.0)
             if verbose:
-                print(f"Update {update_idx+1:4d}/{config['NUM_UPDATES']} | Steps: {total_steps:,} | SPS: {sps:,.0f} | Return: {mean_return:.1f}")
+                print(
+                    f"Update {update_idx+1:4d}/{config['NUM_UPDATES']} | Steps: {total_steps:,} "
+                    f"| SPS: {sps:,.0f} | Return: {mean_return:.1f}"
+                )
             if use_wandb:
-                wandb.log({"timestep": total_steps, "perf/sps": sps, "train/episode_return": mean_return}, step=total_steps)
+                wandb.log(
+                    {
+                        "timestep": total_steps,
+                        "perf/sps": sps,
+                        **episode_metrics,
+                        **achievement_metrics,
+                    },
+                    step=total_steps,
+                )
             last_log_time, last_log_steps = current_time, total_steps
 
     total_time = time.perf_counter() - start_time
@@ -496,7 +551,9 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
         current_time = time.perf_counter()
         if (update_idx + 1) % 10 == 0:
             sps = (total_steps - last_log_steps) / (current_time - last_log_time)
-            mean_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+            episode_metrics = _extract_episode_metrics(traj_batch.info)
+            achievement_metrics = _extract_achievement_metrics(env_state, num_envs)
+            mean_return = episode_metrics.get("train/episode_return", 0.0)
             text_ms = llm_metrics.get("timing/text_render_ms")
             llm_ms = llm_metrics.get("timing/llm_inference_ms")
             timing_suffix = ""
@@ -508,7 +565,17 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
                     f"| SPS: {sps:,.0f} | Return: {mean_return:.1f} | LLM: {llm_calls}{timing_suffix}"
                 )
             if use_wandb:
-                wandb.log({"timestep": total_steps, "perf/sps": sps, "perf/llm_calls": llm_calls, "train/episode_return": mean_return, **llm_metrics}, step=total_steps)
+                wandb.log(
+                    {
+                        "timestep": total_steps,
+                        "perf/sps": sps,
+                        "perf/llm_calls": llm_calls,
+                        **episode_metrics,
+                        **achievement_metrics,
+                        **llm_metrics,
+                    },
+                    step=total_steps,
+                )
             last_log_time, last_log_steps = current_time, total_steps
 
     total_time = time.perf_counter() - start_time

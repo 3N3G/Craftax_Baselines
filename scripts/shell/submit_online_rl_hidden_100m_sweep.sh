@@ -10,7 +10,7 @@ TIMESTEPS="${TIMESTEPS:-1e8}"
 NUM_STEPS="${NUM_STEPS:-125}"
 LAYER="${LAYER:--1}"
 TOKENS="${TOKENS:-1}"
-SKIPS=(1 5 25 125)
+SKIPS=(1 5 25 100000000)
 
 echo "Submitting online_rl_hidden_jax sweep"
 echo "  envs=${ENVS} timesteps=${TIMESTEPS} num_steps=${NUM_STEPS} layer=${LAYER} tokens=${TOKENS}"
