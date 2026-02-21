@@ -13,8 +13,10 @@ Verification modes:
 """
 
 import argparse
+import json
 import os
 import sys
+from datetime import datetime
 
 # GPU memory sharing: JAX (XLA) and vLLM (PyTorch/CUDA) can coexist on the
 # same GPU. Key settings to avoid conflicts:
@@ -40,6 +42,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from flax import serialization
 from flax.training.train_state import TrainState
 import wandb
 from craftax.craftax.constants import Achievement
@@ -135,28 +138,92 @@ def _extract_episode_metrics(traj_info: dict) -> Dict[str, float]:
     return metrics
 
 
-def _extract_achievement_metrics(log_env_state, num_envs: int) -> Dict[str, float]:
-    """Compute total and per-achievement unlock metrics from current env state."""
+def _extract_achievement_metrics(
+    log_env_state,
+    lifetime_any_unlocked: Optional[np.ndarray],
+    lifetime_slot_unlocked: Optional[np.ndarray],
+) -> Tuple[Dict[str, float], Optional[np.ndarray], Optional[np.ndarray]]:
+    """Compute snapshot + lifetime achievement metrics.
+
+    Snapshot metrics are non-monotonic and reflect current active env states.
+    Lifetime metrics are monotonic over the run.
+    """
     metrics: Dict[str, float] = {}
     try:
-        achievements = log_env_state.env_state.achievements  # (num_envs, num_achievements)
-        any_unlocked = jnp.any(achievements, axis=0)
-        total_unique = jnp.sum(any_unlocked)
-        total_unlocks = jnp.sum(achievements)
-        metrics["achievements/total_unique"] = float(jax.device_get(total_unique))
-        metrics["achievements/total_unlocks"] = float(jax.device_get(total_unlocks))
+        achievements_np = np.asarray(jax.device_get(log_env_state.env_state.achievements)).astype(bool)
+        if achievements_np.ndim != 2:
+            return metrics, lifetime_any_unlocked, lifetime_slot_unlocked
 
-        unlocked_frac = jnp.mean(achievements.astype(jnp.float32), axis=0)
-        unlocked_frac_np = np.asarray(jax.device_get(unlocked_frac))
+        # Snapshot (current state across env workers)
+        snapshot_any = achievements_np.any(axis=0)
+        snapshot_total_unique = int(snapshot_any.sum())
+        snapshot_total_unlocks = int(achievements_np.sum())
+        metrics["achievements/total_unique"] = float(snapshot_total_unique)
+        metrics["achievements/total_unlocks"] = float(snapshot_total_unlocks)
+        metrics["achievements/snapshot_total_unique"] = float(snapshot_total_unique)
+        metrics["achievements/snapshot_total_unlocks"] = float(snapshot_total_unlocks)
+
+        # Lifetime (monotonic for this run)
+        if lifetime_any_unlocked is None:
+            lifetime_any_unlocked = np.zeros_like(snapshot_any, dtype=bool)
+        if lifetime_slot_unlocked is None:
+            lifetime_slot_unlocked = np.zeros_like(achievements_np, dtype=bool)
+        lifetime_any_unlocked |= snapshot_any
+        lifetime_slot_unlocked |= achievements_np
+        metrics["achievements/lifetime_total_unique"] = float(lifetime_any_unlocked.sum())
+        metrics["achievements/lifetime_total_unlocks"] = float(lifetime_slot_unlocked.sum())
+
+        snapshot_rate = achievements_np.mean(axis=0)
+        lifetime_rate = lifetime_slot_unlocked.mean(axis=0)
         for idx, ach in enumerate(Achievement):
-            if idx >= unlocked_frac_np.shape[0]:
+            if idx >= snapshot_rate.shape[0]:
                 break
             ach_name = ach.name.lower().replace(" ", "_")
-            metrics[f"achievements/{ach_name}_unlock_rate"] = float(unlocked_frac_np[idx])
+            metrics[f"achievements/{ach_name}_unlock_rate"] = float(snapshot_rate[idx])
+            metrics[f"achievements/{ach_name}_lifetime_unlock_rate"] = float(lifetime_rate[idx])
     except Exception:
-        # Keep training robust even if env internals differ.
+        pass
+    return metrics, lifetime_any_unlocked, lifetime_slot_unlocked
+
+
+def _extract_loss_metrics(loss_info: jnp.ndarray) -> Dict[str, float]:
+    """Summarize PPO losses from [epochs, minibatches, 6] tensor."""
+    metrics: Dict[str, float] = {}
+    try:
+        loss_np = np.asarray(jax.device_get(loss_info))
+        if loss_np.ndim != 3 or loss_np.shape[-1] < 6:
+            return metrics
+        means = loss_np.mean(axis=(0, 1))
+        metrics["train/total_loss"] = float(means[0])
+        metrics["train/value_loss"] = float(means[1])
+        metrics["train/policy_loss"] = float(means[2])
+        metrics["train/entropy"] = float(means[3])
+        metrics["train/approx_kl"] = float(means[4])
+        metrics["train/clipfrac"] = float(means[5])
+    except Exception:
         pass
     return metrics
+
+
+def _explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    var_y = float(np.var(y_true))
+    if var_y < 1e-8:
+        return 0.0
+    return float(1.0 - np.var(y_true - y_pred) / var_y)
+
+
+def _maybe_save_policy(policy_save_dir: str, run_name: str, params, summary: Dict[str, float]) -> str:
+    os.makedirs(policy_save_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"{run_name}_{ts}"
+    params_path = os.path.join(policy_save_dir, f"{base}.msgpack")
+    meta_path = os.path.join(policy_save_dir, f"{base}.json")
+    params_cpu = jax.device_get(params)
+    with open(params_path, "wb") as f:
+        f.write(serialization.to_bytes(params_cpu))
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
+    return params_path
 
 
 # =============================================================================
@@ -270,13 +337,19 @@ def make_train_no_llm(config, network, env, env_params):
                 value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
                 value_loss = 0.5 * jnp.maximum(jnp.square(value - targets), jnp.square(value_pred_clipped - targets)).mean()
                 ratio = jnp.exp(log_prob - traj_batch.log_prob)
+                log_ratio = log_prob - traj_batch.log_prob
                 gae = (gae - gae.mean()) / (gae.std() + 1e-8)
                 loss_actor = -jnp.minimum(ratio * gae, jnp.clip(ratio, 1.0 - config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae).mean()
                 entropy = pi.entropy().mean()
-                return loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy, (value_loss, loss_actor, entropy)
+                total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
+                approx_kl = ((ratio - 1.0) - log_ratio).mean()
+                clipfrac = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
+                return total_loss, (value_loss, loss_actor, entropy, approx_kl, clipfrac)
             grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-            total_loss, grads = grad_fn(train_state.params, traj_batch, advantages, targets)
-            return train_state.apply_gradients(grads=grads), total_loss
+            (total_loss, aux), grads = grad_fn(train_state.params, traj_batch, advantages, targets)
+            value_loss, loss_actor, entropy, approx_kl, clipfrac = aux
+            loss_vec = jnp.asarray([total_loss, value_loss, loss_actor, entropy, approx_kl, clipfrac], dtype=jnp.float32)
+            return train_state.apply_gradients(grads=grads), loss_vec
 
         train_state, traj_batch, advantages, targets, rng = update_state
         rng, _rng = jax.random.split(rng)
@@ -339,13 +412,19 @@ def make_train_with_llm(config, network, env, env_params):
                 value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
                 value_loss = 0.5 * jnp.maximum(jnp.square(value - targets), jnp.square(value_pred_clipped - targets)).mean()
                 ratio = jnp.exp(log_prob - traj_batch.log_prob)
+                log_ratio = log_prob - traj_batch.log_prob
                 gae = (gae - gae.mean()) / (gae.std() + 1e-8)
                 loss_actor = -jnp.minimum(ratio * gae, jnp.clip(ratio, 1.0 - config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae).mean()
                 entropy = pi.entropy().mean()
-                return loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy, (value_loss, loss_actor, entropy)
+                total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
+                approx_kl = ((ratio - 1.0) - log_ratio).mean()
+                clipfrac = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
+                return total_loss, (value_loss, loss_actor, entropy, approx_kl, clipfrac)
             grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-            total_loss, grads = grad_fn(train_state.params, traj_batch, advantages, targets)
-            return train_state.apply_gradients(grads=grads), total_loss
+            (total_loss, aux), grads = grad_fn(train_state.params, traj_batch, advantages, targets)
+            value_loss, loss_actor, entropy, approx_kl, clipfrac = aux
+            loss_vec = jnp.asarray([total_loss, value_loss, loss_actor, entropy, approx_kl, clipfrac], dtype=jnp.float32)
+            return train_state.apply_gradients(grads=grads), loss_vec
 
         train_state, traj_batch, advantages, targets, rng = update_state
         rng, _rng = jax.random.split(rng)
@@ -372,7 +451,17 @@ def make_train_with_llm(config, network, env, env_params):
 # Training Loop - No LLM (matches ppo.py)
 # =============================================================================
 
-def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use_wandb: bool, seed: int, verbose: bool) -> Dict:
+def run_training_no_llm(
+    num_envs: int,
+    total_timesteps: int,
+    num_steps: int,
+    use_wandb: bool,
+    seed: int,
+    verbose: bool,
+    save_policy: bool,
+    policy_save_dir: str,
+    run_name: str,
+) -> Dict:
     print("=" * 70)
     print("Online RL - NO LLM MODE (matches ppo.py)")
     print("=" * 70)
@@ -412,6 +501,9 @@ def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use
     total_steps, episode_returns = 0, []
     start_time = time.perf_counter()
     last_log_time, last_log_steps = start_time, 0
+    last_log_update = 0
+    lifetime_any_unlocked = None
+    lifetime_slot_unlocked = None
 
     for update_idx in range(config["NUM_UPDATES"]):
         carry = (train_state, env_state, obs, rng)
@@ -420,7 +512,7 @@ def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use
         total_steps += num_steps * num_envs
 
         rng, update_rng = jax.random.split(rng)
-        train_state, rng, _ = _ppo_update(train_state, traj_batch, obs, update_rng)
+        train_state, rng, loss_info = _ppo_update(train_state, traj_batch, obs, update_rng)
 
         completed_mask = traj_batch.info["returned_episode"].flatten()
         completed_returns = traj_batch.info["returned_episode_returns"].flatten()[completed_mask]
@@ -429,9 +521,21 @@ def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use
 
         current_time = time.perf_counter()
         if (update_idx + 1) % 10 == 0:
-            sps = (total_steps - last_log_steps) / (current_time - last_log_time)
+            elapsed = current_time - last_log_time
+            update_delta = (update_idx + 1) - last_log_update
+            sps = (total_steps - last_log_steps) / elapsed
+            updates_per_sec = update_delta / elapsed
             episode_metrics = _extract_episode_metrics(traj_batch.info)
-            achievement_metrics = _extract_achievement_metrics(env_state, num_envs)
+            achievement_metrics, lifetime_any_unlocked, lifetime_slot_unlocked = _extract_achievement_metrics(
+                env_state, lifetime_any_unlocked, lifetime_slot_unlocked
+            )
+            loss_metrics = _extract_loss_metrics(loss_info)
+            targets_np = np.asarray(jax.device_get(traj_batch.reward + (config["GAMMA"] * traj_batch.value * (1 - traj_batch.done))))
+            values_np = np.asarray(jax.device_get(traj_batch.value))
+            perf_metrics = {
+                "perf/updates_per_sec": updates_per_sec,
+                "train/explained_variance": _explained_variance(values_np.reshape(-1), targets_np.reshape(-1)),
+            }
             mean_return = episode_metrics.get("train/episode_return", 0.0)
             if verbose:
                 print(
@@ -444,15 +548,24 @@ def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use
                         "timestep": total_steps,
                         "perf/sps": sps,
                         **episode_metrics,
+                        **loss_metrics,
+                        **perf_metrics,
                         **achievement_metrics,
                     },
                     step=total_steps,
                 )
             last_log_time, last_log_steps = current_time, total_steps
+            last_log_update = update_idx + 1
 
     total_time = time.perf_counter() - start_time
-    print(f"\nDone. SPS: {total_steps/total_time:,.0f}, Return: {np.mean(episode_returns[-100:]) if episode_returns else 0:.1f}")
-    return {"sps": total_steps/total_time, "final_return": np.mean(episode_returns[-100:]) if episode_returns else 0}
+    final_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+    final_metrics = {"sps": total_steps/total_time, "final_return": final_return}
+    if save_policy:
+        save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics)
+        print(f"Saved policy checkpoint: {save_path}")
+        final_metrics["policy_path"] = save_path
+    print(f"\nDone. SPS: {total_steps/total_time:,.0f}, Return: {final_return:.1f}")
+    return final_metrics
 
 
 # =============================================================================
@@ -461,7 +574,8 @@ def run_training_no_llm(num_envs: int, total_timesteps: int, num_steps: int, use
 
 def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_steps: int,
                           model_id: str, target_layer: int, tokens_to_generate: int,
-                          use_wandb: bool, seed: int, verbose: bool) -> Dict:
+                          use_wandb: bool, seed: int, verbose: bool,
+                          save_policy: bool, policy_save_dir: str, run_name: str) -> Dict:
     print("=" * 70)
     print(f"Online RL with LLM Hidden States (skip_n={skip_n})")
     print("=" * 70)
@@ -510,6 +624,9 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     start_time = time.perf_counter()
     print("Starting training loop...", flush=True)
     last_log_time, last_log_steps = start_time, 0
+    last_log_update, last_log_llm_calls = 0, 0
+    lifetime_any_unlocked = None
+    lifetime_slot_unlocked = None
 
     for update_idx in range(config["NUM_UPDATES"]):
         llm_metrics = {}
@@ -541,7 +658,7 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
         total_steps += num_steps * num_envs
 
         rng, update_rng = jax.random.split(rng)
-        train_state, rng, _ = _ppo_update(train_state, traj_batch, obs, hidden_states, update_rng)
+        train_state, rng, loss_info = _ppo_update(train_state, traj_batch, obs, hidden_states, update_rng)
 
         completed_mask = traj_batch.info["returned_episode"].flatten()
         completed_returns = traj_batch.info["returned_episode_returns"].flatten()[completed_mask]
@@ -550,9 +667,27 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
 
         current_time = time.perf_counter()
         if (update_idx + 1) % 10 == 0:
-            sps = (total_steps - last_log_steps) / (current_time - last_log_time)
+            elapsed = current_time - last_log_time
+            step_delta = total_steps - last_log_steps
+            update_delta = (update_idx + 1) - last_log_update
+            llm_delta = llm_calls - last_log_llm_calls
+            sps = step_delta / elapsed
+            updates_per_sec = update_delta / elapsed
+            llm_calls_per_sec = llm_delta / elapsed if elapsed > 0 else 0.0
+            steps_per_llm_call = step_delta / max(llm_delta, 1)
             episode_metrics = _extract_episode_metrics(traj_batch.info)
-            achievement_metrics = _extract_achievement_metrics(env_state, num_envs)
+            achievement_metrics, lifetime_any_unlocked, lifetime_slot_unlocked = _extract_achievement_metrics(
+                env_state, lifetime_any_unlocked, lifetime_slot_unlocked
+            )
+            loss_metrics = _extract_loss_metrics(loss_info)
+            targets_np = np.asarray(jax.device_get(traj_batch.reward + (config["GAMMA"] * traj_batch.value * (1 - traj_batch.done))))
+            values_np = np.asarray(jax.device_get(traj_batch.value))
+            perf_metrics = {
+                "perf/updates_per_sec": updates_per_sec,
+                "perf/llm_calls_per_sec": llm_calls_per_sec,
+                "perf/steps_per_llm_call": steps_per_llm_call,
+                "train/explained_variance": _explained_variance(values_np.reshape(-1), targets_np.reshape(-1)),
+            }
             mean_return = episode_metrics.get("train/episode_return", 0.0)
             text_ms = llm_metrics.get("timing/text_render_ms")
             llm_ms = llm_metrics.get("timing/llm_inference_ms")
@@ -571,16 +706,25 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
                         "perf/sps": sps,
                         "perf/llm_calls": llm_calls,
                         **episode_metrics,
+                        **loss_metrics,
+                        **perf_metrics,
                         **achievement_metrics,
                         **llm_metrics,
                     },
                     step=total_steps,
                 )
             last_log_time, last_log_steps = current_time, total_steps
+            last_log_update, last_log_llm_calls = update_idx + 1, llm_calls
 
     total_time = time.perf_counter() - start_time
-    print(f"\nDone. SPS: {total_steps/total_time:,.0f}, LLM calls: {llm_calls}, Return: {np.mean(episode_returns[-100:]) if episode_returns else 0:.1f}")
-    return {"sps": total_steps/total_time, "llm_calls": llm_calls, "final_return": np.mean(episode_returns[-100:]) if episode_returns else 0}
+    final_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+    final_metrics = {"sps": total_steps/total_time, "llm_calls": llm_calls, "final_return": final_return}
+    if save_policy:
+        save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics)
+        print(f"Saved policy checkpoint: {save_path}")
+        final_metrics["policy_path"] = save_path
+    print(f"\nDone. SPS: {total_steps/total_time:,.0f}, LLM calls: {llm_calls}, Return: {final_return:.1f}")
+    return final_metrics
 
 
 # =============================================================================
@@ -603,17 +747,26 @@ def main():
     parser.add_argument("--wandb-entity", type=str, default=Config.WANDB_ENTITY)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save-policy", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--policy-save-dir", type=str, default="checkpoints/online_rl_hidden_jax")
     args = parser.parse_args()
 
     use_wandb = args.use_wandb and not args.no_wandb
+    mode_str = "no-llm" if args.no_llm else f"skip{args.skip_n}"
+    run_name = f"online-jax-{args.envs}env-{mode_str}"
     if use_wandb:
-        mode_str = "no-llm" if args.no_llm else f"skip{args.skip_n}"
-        wandb.init(project=args.wandb_project, entity=args.wandb_entity, name=f"online-jax-{args.envs}env-{mode_str}", config=vars(args))
+        wandb.init(project=args.wandb_project, entity=args.wandb_entity, name=run_name, config=vars(args))
 
     if args.no_llm:
-        results = run_training_no_llm(args.envs, args.timesteps, args.num_steps, use_wandb, args.seed, not args.quiet)
+        results = run_training_no_llm(
+            args.envs, args.timesteps, args.num_steps, use_wandb, args.seed, not args.quiet,
+            args.save_policy, args.policy_save_dir, run_name
+        )
     else:
-        results = run_training_with_llm(args.envs, args.timesteps, args.skip_n, args.num_steps, args.model, args.layer, args.tokens, use_wandb, args.seed, not args.quiet)
+        results = run_training_with_llm(
+            args.envs, args.timesteps, args.skip_n, args.num_steps, args.model, args.layer, args.tokens, use_wandb, args.seed, not args.quiet,
+            args.save_policy, args.policy_save_dir, run_name
+        )
 
     if use_wandb:
         wandb.finish()
