@@ -8,26 +8,51 @@
 #SBATCH --output=logs/online_rl_hidden_jax_%j.out
 #SBATCH --error=logs/online_rl_hidden_jax_%j.err
 
-# Online RL with vLLM Hidden States - JAX Implementation
-# Should match PPO baseline performance (~18,500 SPS) when skip_n is very large
+# Online RL with vLLM Hidden States - JAX implementation.
 
-set -e
+set -eo pipefail
 
+# Source bashrc defensively because some profile scripts can return non-zero.
+set +e
+set +u
+set +o pipefail
 source ~/.bashrc
+BASHRC_RC=$?
+set -e
+set -u
+set -o pipefail
+if [[ $BASHRC_RC -ne 0 ]]; then
+    echo "WARNING: source ~/.bashrc exited with code $BASHRC_RC; continuing"
+fi
 
 mkdir -p logs
 cd ~/Craftax_Baselines
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONUNBUFFERED=1
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "ERROR: conda not found after sourcing bashrc"
+    exit 1
+fi
+
+activate_conda_for() {
+    local purpose="$1"
+    shift
+    local env_name
+    for env_name in "$@"; do
+        if conda activate "${env_name}" >/dev/null 2>&1; then
+            echo "Activated conda env for ${purpose}: ${env_name}"
+            return 0
+        fi
+    done
+    echo "ERROR: failed to activate conda env for ${purpose}"
+    echo "Tried: $*"
+    conda env list || true
+    return 1
+}
 
 # vLLM server needs craftax_fast_llm, training needs craftax (for distrax)
 conda activate craftax_fast_llm
-
-echo "========================================"
-echo "Online RL with vLLM Hidden States (JAX)"
-echo "Job ID: $SLURM_JOB_ID"
-echo "========================================"
-echo "Host: $(hostname)"
-echo "GPU: $(nvidia-smi --list-gpus | head -1)"
-echo "========================================"
 
 # Parameters
 ENVS=${1:-8}
@@ -36,6 +61,14 @@ SKIP_N=${3:-1}
 LAYER=${4:--1}  # Which layer to extract (-1 for last available)
 TOKENS=${5:-1}  # How many tokens to generate (1 for prompt-only)
 
+echo "========================================"
+echo "Online RL with vLLM Hidden States (JAX)"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Date: $(date)"
+echo "Host: $(hostname)"
+echo "GPU: $(nvidia-smi --list-gpus | head -1)"
+echo "========================================"
+
 echo "Environments: $ENVS"
 echo "Timesteps: $TIMESTEPS"
 echo "Skip-N: $SKIP_N (LLM inference every $SKIP_N steps)"
@@ -43,8 +76,21 @@ echo "Extract layer: $LAYER"
 echo "Tokens to generate: $TOKENS"
 echo ""
 
+VLLM_PID=""
+cleanup() {
+    if [[ -n "${VLLM_PID}" ]]; then
+        echo "Stopping vLLM server (pid=${VLLM_PID})..."
+        kill "${VLLM_PID}" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
 # Start vLLM server in background
 echo "Starting vLLM server..."
+activate_conda_for "vllm-server" \
+    /data/user_data/geney/.conda/envs/craftax_fast_llm \
+    craftax_fast_llm \
+    base
 bash scripts/start_vllm_hidden.sh --mode last_token > logs/vllm_server_jax_${SLURM_JOB_ID}.log 2>&1 &
 VLLM_PID=$!
 
@@ -78,7 +124,10 @@ done
 # Switch to craftax environment for JAX training (has distrax)
 echo ""
 echo "Switching to craftax environment for training..."
-conda activate /data/user_data/geney/.conda/envs/craftax
+activate_conda_for "training" \
+    /data/user_data/geney/.conda/envs/craftax \
+    craftax \
+    base
 
 # Run JAX version
 echo "Starting JAX training..."
@@ -92,9 +141,5 @@ python -u online_rl_llm/online_rl_hidden_jax.py \
     --wandb-project craftax-online-rl-llm \
     --wandb-entity iris-sobolmark
 
-# Clean up - kill vLLM server
-echo "Stopping vLLM server..."
-kill $VLLM_PID 2>/dev/null || true
-
 echo ""
-echo "Done!"
+echo "Done! Date: $(date)"

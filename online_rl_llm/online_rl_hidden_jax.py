@@ -54,6 +54,7 @@ from models.actor_critic import ActorCritic, ActorCriticAug
 # Import text processing and vLLM interface
 from utils.llm_prompts import filter_text_obs
 from utils.llm_extractor import VLLMHiddenStateExtractor
+from labelling.obs_to_text import obs_to_text
 import requests
 
 
@@ -165,12 +166,14 @@ class LLMHiddenStateManager:
         self.hidden_size = self.llm.hidden_size
         print(f"   Hidden size: {self.hidden_size}")
 
-    def extract(self, env_states, num_envs: int) -> Tuple[jnp.ndarray, Dict]:
+    def extract(self, obs_batch: jnp.ndarray, num_envs: int) -> Tuple[jnp.ndarray, Dict]:
         t_start = time.perf_counter()
+        # Convert once to host and decode text from symbolic observations.
+        # This is dramatically faster than render_craftax_text(state) on per-env state objects.
+        obs_host = np.asarray(jax.device_get(obs_batch))
         text_observations = []
         for i in range(num_envs):
-            single_state = jax.tree.map(lambda x: x[i], env_states)
-            raw_text = render_craftax_text_swapped(single_state)
+            raw_text = obs_to_text(obs_host[i])
             filtered_text = filter_text_obs(raw_text)
             text_observations.append(filtered_text)
         t_text = time.perf_counter() - t_start
@@ -460,7 +463,7 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
 
         while steps_collected < num_steps:
             if steps_since_llm >= skip_n:
-                hidden_states, llm_metrics = llm_manager.extract(env_state.env_state, num_envs)
+                hidden_states, llm_metrics = llm_manager.extract(obs, num_envs)
                 steps_since_llm = 0
                 llm_calls += 1
 
@@ -494,8 +497,16 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
         if (update_idx + 1) % 10 == 0:
             sps = (total_steps - last_log_steps) / (current_time - last_log_time)
             mean_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+            text_ms = llm_metrics.get("timing/text_render_ms")
+            llm_ms = llm_metrics.get("timing/llm_inference_ms")
+            timing_suffix = ""
+            if text_ms is not None and llm_ms is not None:
+                timing_suffix = f" | TextMS: {text_ms:.1f} | LLMMS: {llm_ms:.1f}"
             if verbose:
-                print(f"Update {update_idx+1:4d}/{config['NUM_UPDATES']} | Steps: {total_steps:,} | SPS: {sps:,.0f} | Return: {mean_return:.1f} | LLM: {llm_calls}")
+                print(
+                    f"Update {update_idx+1:4d}/{config['NUM_UPDATES']} | Steps: {total_steps:,} "
+                    f"| SPS: {sps:,.0f} | Return: {mean_return:.1f} | LLM: {llm_calls}{timing_suffix}"
+                )
             if use_wandb:
                 wandb.log({"timestep": total_steps, "perf/sps": sps, "perf/llm_calls": llm_calls, "train/episode_return": mean_return, **llm_metrics}, step=total_steps)
             last_log_time, last_log_steps = current_time, total_steps
