@@ -13,9 +13,12 @@ Verification modes:
 """
 
 import argparse
+import glob
 import json
 import os
+import pickle
 import sys
+from collections import deque
 from datetime import datetime
 
 # GPU memory sharing: JAX (XLA) and vLLM (PyTorch/CUDA) can coexist on the
@@ -212,7 +215,13 @@ def _explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     return float(1.0 - np.var(y_true - y_pred) / var_y)
 
 
-def _maybe_save_policy(policy_save_dir: str, run_name: str, params, summary: Dict[str, float]) -> str:
+def _maybe_save_policy(
+    policy_save_dir: str,
+    run_name: str,
+    params,
+    summary: Dict[str, float],
+    metadata: Optional[Dict] = None,
+) -> str:
     os.makedirs(policy_save_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = f"{run_name}_{ts}"
@@ -221,9 +230,119 @@ def _maybe_save_policy(policy_save_dir: str, run_name: str, params, summary: Dic
     params_cpu = jax.device_get(params)
     with open(params_path, "wb") as f:
         f.write(serialization.to_bytes(params_cpu))
+    payload = dict(summary)
+    if metadata is not None:
+        payload["metadata"] = metadata
     with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+        json.dump(payload, f, indent=2, sort_keys=True)
     return params_path
+
+
+def _save_policy_snapshot(
+    policy_save_dir: str,
+    run_name: str,
+    tag: str,
+    params,
+    summary: Dict[str, float],
+    metadata: Optional[Dict] = None,
+) -> str:
+    os.makedirs(policy_save_dir, exist_ok=True)
+    base = f"{run_name}_{tag}"
+    params_path = os.path.join(policy_save_dir, f"{base}.msgpack")
+    meta_path = os.path.join(policy_save_dir, f"{base}.json")
+    params_cpu = jax.device_get(params)
+    with open(params_path, "wb") as f:
+        f.write(serialization.to_bytes(params_cpu))
+    payload = dict(summary)
+    if metadata is not None:
+        payload["metadata"] = metadata
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+    return params_path
+
+
+def _to_host_tree(tree):
+    def _to_host_leaf(x):
+        try:
+            x_host = jax.device_get(x)
+        except Exception:
+            return x
+        if isinstance(x_host, np.ndarray):
+            return x_host
+        if np.isscalar(x_host):
+            return np.asarray(x_host)
+        return x_host
+
+    return jax.tree_util.tree_map(_to_host_leaf, tree)
+
+
+def _save_resumable_checkpoint(
+    checkpoint_dir: str,
+    run_name: str,
+    payload: Dict,
+) -> str:
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    total_steps = int(payload["total_steps"])
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    base = f"{run_name}_resume_step{total_steps:012d}_{ts}"
+    ckpt_path = os.path.join(checkpoint_dir, f"{base}.pkl")
+    meta_path = os.path.join(checkpoint_dir, f"{base}.json")
+
+    with open(ckpt_path, "wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    meta_payload = {
+        "run_name": run_name,
+        "mode": payload.get("mode"),
+        "total_steps": total_steps,
+        "update_idx": int(payload.get("update_idx", 0)),
+        "llm_calls": int(payload.get("llm_calls", 0)),
+        "steps_since_llm": int(payload.get("steps_since_llm", 0)),
+        "checkpoint_path": ckpt_path,
+        "timestamp": ts,
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta_payload, f, indent=2, sort_keys=True)
+
+    latest_meta_path = os.path.join(checkpoint_dir, "latest_resume.json")
+    with open(latest_meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta_payload, f, indent=2, sort_keys=True)
+    return ckpt_path
+
+
+def _extract_step_from_resume_path(path: str) -> int:
+    m = re.search(r"_resume_step(\d+)", os.path.basename(path))
+    if m is None:
+        return -1
+    return int(m.group(1))
+
+
+def _resolve_resume_checkpoint(resume_from: str) -> str:
+    if os.path.isfile(resume_from):
+        return resume_from
+    if not os.path.isdir(resume_from):
+        raise FileNotFoundError(f"Resume path is neither file nor directory: {resume_from}")
+
+    latest_meta_path = os.path.join(resume_from, "latest_resume.json")
+    if os.path.exists(latest_meta_path):
+        with open(latest_meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        ckpt_path = meta.get("checkpoint_path")
+        if ckpt_path and os.path.exists(ckpt_path):
+            return ckpt_path
+
+    candidates = glob.glob(os.path.join(resume_from, "*_resume_step*.pkl"))
+    if not candidates:
+        raise FileNotFoundError(f"No resumable checkpoints found under: {resume_from}")
+    candidates.sort(key=lambda p: (_extract_step_from_resume_path(p), p))
+    return candidates[-1]
+
+
+def _load_resumable_checkpoint(resume_from: str) -> Tuple[Dict, str]:
+    ckpt_path = _resolve_resume_checkpoint(resume_from)
+    with open(ckpt_path, "rb") as f:
+        payload = pickle.load(f)
+    return payload, ckpt_path
 
 
 # =============================================================================
@@ -461,6 +580,10 @@ def run_training_no_llm(
     save_policy: bool,
     policy_save_dir: str,
     run_name: str,
+    checkpoint_every_steps: int,
+    checkpoint_dir: Optional[str],
+    resume_from: Optional[str],
+    run_metadata: Optional[Dict] = None,
 ) -> Dict:
     print("=" * 70)
     print("Online RL - NO LLM MODE (matches ppo.py)")
@@ -498,14 +621,53 @@ def run_training_no_llm(
     rng, reset_rng = jax.random.split(rng)
     obs, env_state = env.reset(reset_rng, env_params)
 
-    total_steps, episode_returns = 0, []
+    effective_checkpoint_dir = checkpoint_dir or policy_save_dir
+
+    total_steps = 0
+    episode_returns = deque(maxlen=100)
+    start_update_idx = 0
     start_time = time.perf_counter()
     last_log_time, last_log_steps = start_time, 0
     last_log_update = 0
     lifetime_any_unlocked = None
     lifetime_slot_unlocked = None
 
-    for update_idx in range(config["NUM_UPDATES"]):
+    if resume_from:
+        payload, resume_path = _load_resumable_checkpoint(resume_from)
+        if payload.get("mode") != "no_llm":
+            raise ValueError(
+                f"Resume checkpoint mode mismatch: expected no_llm, got {payload.get('mode')}"
+            )
+        train_state = serialization.from_state_dict(train_state, payload["train_state_state"])
+        env_state = serialization.from_state_dict(env_state, payload["env_state_state"])
+        obs = jnp.asarray(payload["obs"])
+        rng = jnp.asarray(payload["rng"])
+        total_steps = int(payload.get("total_steps", 0))
+        start_update_idx = int(
+            payload.get("update_idx", total_steps // max(1, num_steps * num_envs))
+        )
+        for ret in payload.get("episode_returns_tail", []):
+            episode_returns.append(float(ret))
+        if payload.get("lifetime_any_unlocked") is not None:
+            lifetime_any_unlocked = np.asarray(payload["lifetime_any_unlocked"]).astype(bool)
+        if payload.get("lifetime_slot_unlocked") is not None:
+            lifetime_slot_unlocked = np.asarray(payload["lifetime_slot_unlocked"]).astype(bool)
+        print(
+            f"Resumed from {resume_path}: total_steps={total_steps}, "
+            f"start_update={start_update_idx}/{config['NUM_UPDATES']}"
+        )
+
+        # Reset timing anchors so SPS after resume reflects post-resume runtime.
+        start_time = time.perf_counter()
+        last_log_time, last_log_steps = start_time, total_steps
+        last_log_update = start_update_idx
+
+    if checkpoint_every_steps > 0:
+        next_checkpoint_step = ((total_steps // checkpoint_every_steps) + 1) * checkpoint_every_steps
+    else:
+        next_checkpoint_step = None
+
+    for update_idx in range(start_update_idx, config["NUM_UPDATES"]):
         carry = (train_state, env_state, obs, rng)
         carry, traj_batch = jax.lax.scan(_env_step, carry, None, num_steps)
         train_state, env_state, obs, rng = carry
@@ -517,7 +679,8 @@ def run_training_no_llm(
         completed_mask = traj_batch.info["returned_episode"].flatten()
         completed_returns = traj_batch.info["returned_episode_returns"].flatten()[completed_mask]
         if len(completed_returns) > 0:
-            episode_returns.extend(completed_returns.tolist())
+            for ret in completed_returns.tolist():
+                episode_returns.append(float(ret))
 
         current_time = time.perf_counter()
         if (update_idx + 1) % 10 == 0:
@@ -557,13 +720,84 @@ def run_training_no_llm(
             last_log_time, last_log_steps = current_time, total_steps
             last_log_update = update_idx + 1
 
+        if save_policy and next_checkpoint_step is not None and total_steps >= next_checkpoint_step:
+            mean_return = float(np.mean(episode_returns)) if episode_returns else 0.0
+            checkpoint_summary = {
+                "timestep": int(total_steps),
+                "sps": float(total_steps / max(1e-6, (time.perf_counter() - start_time))),
+                "final_return": mean_return,
+                "intermediate": True,
+            }
+            tag = f"step{total_steps:012d}"
+            policy_path = _save_policy_snapshot(
+                policy_save_dir=policy_save_dir,
+                run_name=run_name,
+                tag=tag,
+                params=train_state.params,
+                summary=checkpoint_summary,
+                metadata=run_metadata,
+            )
+            resume_payload = {
+                "mode": "no_llm",
+                "run_name": run_name,
+                "total_steps": int(total_steps),
+                "update_idx": int(update_idx + 1),
+                "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
+                "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
+                "obs": np.asarray(jax.device_get(obs)),
+                "rng": np.asarray(jax.device_get(rng)),
+                "episode_returns_tail": list(episode_returns),
+                "lifetime_any_unlocked": None
+                if lifetime_any_unlocked is None
+                else np.asarray(lifetime_any_unlocked, dtype=bool),
+                "lifetime_slot_unlocked": None
+                if lifetime_slot_unlocked is None
+                else np.asarray(lifetime_slot_unlocked, dtype=bool),
+                "saved_policy_path": policy_path,
+            }
+            resume_path = _save_resumable_checkpoint(
+                checkpoint_dir=effective_checkpoint_dir,
+                run_name=run_name,
+                payload=resume_payload,
+            )
+            print(
+                f"Saved intermediate checkpoint at step {total_steps}: "
+                f"policy={policy_path} resume={resume_path}"
+            )
+            next_checkpoint_step = ((total_steps // checkpoint_every_steps) + 1) * checkpoint_every_steps
+
     total_time = time.perf_counter() - start_time
-    final_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+    final_return = float(np.mean(episode_returns)) if episode_returns else 0
     final_metrics = {"sps": total_steps/total_time, "final_return": final_return}
     if save_policy:
-        save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics)
+        save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics, run_metadata)
         print(f"Saved policy checkpoint: {save_path}")
         final_metrics["policy_path"] = save_path
+        final_resume_payload = {
+            "mode": "no_llm",
+            "run_name": run_name,
+            "total_steps": int(total_steps),
+            "update_idx": int(config["NUM_UPDATES"]),
+            "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
+            "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
+            "obs": np.asarray(jax.device_get(obs)),
+            "rng": np.asarray(jax.device_get(rng)),
+            "episode_returns_tail": list(episode_returns),
+            "lifetime_any_unlocked": None
+            if lifetime_any_unlocked is None
+            else np.asarray(lifetime_any_unlocked, dtype=bool),
+            "lifetime_slot_unlocked": None
+            if lifetime_slot_unlocked is None
+            else np.asarray(lifetime_slot_unlocked, dtype=bool),
+            "saved_policy_path": save_path,
+        }
+        final_resume_path = _save_resumable_checkpoint(
+            checkpoint_dir=effective_checkpoint_dir,
+            run_name=run_name,
+            payload=final_resume_payload,
+        )
+        final_metrics["resume_path"] = final_resume_path
+        print(f"Saved resumable checkpoint: {final_resume_path}")
     print(f"\nDone. SPS: {total_steps/total_time:,.0f}, Return: {final_return:.1f}")
     return final_metrics
 
@@ -574,8 +808,13 @@ def run_training_no_llm(
 
 def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_steps: int,
                           model_id: str, target_layer: int, tokens_to_generate: int,
+                          fusion_mode: str, hidden_gate_init_logit: float,
+                          actor_head_layers: int, critic_head_layers: int,
                           use_wandb: bool, seed: int, verbose: bool,
-                          save_policy: bool, policy_save_dir: str, run_name: str) -> Dict:
+                          save_policy: bool, policy_save_dir: str, run_name: str,
+                          checkpoint_every_steps: int, checkpoint_dir: Optional[str],
+                          resume_from: Optional[str],
+                          run_metadata: Optional[Dict] = None) -> Dict:
     print("=" * 70)
     print(f"Online RL with LLM Hidden States (skip_n={skip_n})")
     print("=" * 70)
@@ -596,7 +835,20 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
 
     llm_manager = LLMHiddenStateManager(model_id=model_id, target_layer=target_layer, tokens_to_generate=tokens_to_generate)
 
-    network = ActorCriticAug(action_dim=env.action_space(env_params).n, layer_width=Config.LAYER_SIZE, hidden_state_dim=llm_manager.hidden_size)
+    network = ActorCriticAug(
+        action_dim=env.action_space(env_params).n,
+        layer_width=Config.LAYER_SIZE,
+        hidden_state_dim=llm_manager.hidden_size,
+        fusion_mode=fusion_mode,
+        hidden_gate_init_logit=hidden_gate_init_logit,
+        actor_head_layers=actor_head_layers,
+        critic_head_layers=critic_head_layers,
+    )
+    print(
+        f"Using ActorCriticAug fusion_mode={fusion_mode}, "
+        f"hidden_gate_init_logit={hidden_gate_init_logit}, "
+        f"actor_head_layers={actor_head_layers}, critic_head_layers={critic_head_layers}"
+    )
     rng = jax.random.PRNGKey(seed)
     rng, init_rng = jax.random.split(rng)
     obs_dim = env.observation_space(env_params).shape[0]
@@ -619,8 +871,13 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     hidden_states = jnp.zeros((num_envs, llm_manager.hidden_size))
     print("  Done.", flush=True)
 
-    total_steps, llm_calls, episode_returns = 0, 0, []
-    steps_since_llm = skip_n  # Force LLM on first iter
+    effective_checkpoint_dir = checkpoint_dir or policy_save_dir
+
+    total_steps = 0
+    llm_calls = 0
+    episode_returns = deque(maxlen=100)
+    steps_since_llm = skip_n  # Force LLM on first iter when not resuming
+    start_update_idx = 0
     start_time = time.perf_counter()
     print("Starting training loop...", flush=True)
     last_log_time, last_log_steps = start_time, 0
@@ -628,7 +885,45 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     lifetime_any_unlocked = None
     lifetime_slot_unlocked = None
 
-    for update_idx in range(config["NUM_UPDATES"]):
+    if resume_from:
+        payload, resume_path = _load_resumable_checkpoint(resume_from)
+        if payload.get("mode") != "with_llm":
+            raise ValueError(
+                f"Resume checkpoint mode mismatch: expected with_llm, got {payload.get('mode')}"
+            )
+        train_state = serialization.from_state_dict(train_state, payload["train_state_state"])
+        env_state = serialization.from_state_dict(env_state, payload["env_state_state"])
+        obs = jnp.asarray(payload["obs"])
+        rng = jnp.asarray(payload["rng"])
+        hidden_states = jnp.asarray(payload["hidden_states"])
+        total_steps = int(payload.get("total_steps", 0))
+        llm_calls = int(payload.get("llm_calls", 0))
+        steps_since_llm = int(payload.get("steps_since_llm", skip_n))
+        start_update_idx = int(
+            payload.get("update_idx", total_steps // max(1, num_steps * num_envs))
+        )
+        for ret in payload.get("episode_returns_tail", []):
+            episode_returns.append(float(ret))
+        if payload.get("lifetime_any_unlocked") is not None:
+            lifetime_any_unlocked = np.asarray(payload["lifetime_any_unlocked"]).astype(bool)
+        if payload.get("lifetime_slot_unlocked") is not None:
+            lifetime_slot_unlocked = np.asarray(payload["lifetime_slot_unlocked"]).astype(bool)
+        print(
+            f"Resumed from {resume_path}: total_steps={total_steps}, llm_calls={llm_calls}, "
+            f"start_update={start_update_idx}/{config['NUM_UPDATES']}"
+        )
+
+        # Reset timing anchors so performance metrics after resume are sane.
+        start_time = time.perf_counter()
+        last_log_time, last_log_steps = start_time, total_steps
+        last_log_update, last_log_llm_calls = start_update_idx, llm_calls
+
+    if checkpoint_every_steps > 0:
+        next_checkpoint_step = ((total_steps // checkpoint_every_steps) + 1) * checkpoint_every_steps
+    else:
+        next_checkpoint_step = None
+
+    for update_idx in range(start_update_idx, config["NUM_UPDATES"]):
         llm_metrics = {}
         steps_collected = 0
         all_transitions = []
@@ -663,7 +958,8 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
         completed_mask = traj_batch.info["returned_episode"].flatten()
         completed_returns = traj_batch.info["returned_episode_returns"].flatten()[completed_mask]
         if len(completed_returns) > 0:
-            episode_returns.extend(completed_returns.tolist())
+            for ret in completed_returns.tolist():
+                episode_returns.append(float(ret))
 
         current_time = time.perf_counter()
         if (update_idx + 1) % 10 == 0:
@@ -716,13 +1012,91 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
             last_log_time, last_log_steps = current_time, total_steps
             last_log_update, last_log_llm_calls = update_idx + 1, llm_calls
 
+        if save_policy and next_checkpoint_step is not None and total_steps >= next_checkpoint_step:
+            mean_return = float(np.mean(episode_returns)) if episode_returns else 0.0
+            checkpoint_summary = {
+                "timestep": int(total_steps),
+                "sps": float(total_steps / max(1e-6, (time.perf_counter() - start_time))),
+                "llm_calls": int(llm_calls),
+                "final_return": mean_return,
+                "intermediate": True,
+            }
+            tag = f"step{total_steps:012d}"
+            policy_path = _save_policy_snapshot(
+                policy_save_dir=policy_save_dir,
+                run_name=run_name,
+                tag=tag,
+                params=train_state.params,
+                summary=checkpoint_summary,
+                metadata=run_metadata,
+            )
+            resume_payload = {
+                "mode": "with_llm",
+                "run_name": run_name,
+                "total_steps": int(total_steps),
+                "update_idx": int(update_idx + 1),
+                "llm_calls": int(llm_calls),
+                "steps_since_llm": int(steps_since_llm),
+                "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
+                "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
+                "obs": np.asarray(jax.device_get(obs)),
+                "rng": np.asarray(jax.device_get(rng)),
+                "hidden_states": np.asarray(jax.device_get(hidden_states)),
+                "episode_returns_tail": list(episode_returns),
+                "lifetime_any_unlocked": None
+                if lifetime_any_unlocked is None
+                else np.asarray(lifetime_any_unlocked, dtype=bool),
+                "lifetime_slot_unlocked": None
+                if lifetime_slot_unlocked is None
+                else np.asarray(lifetime_slot_unlocked, dtype=bool),
+                "saved_policy_path": policy_path,
+            }
+            resume_path = _save_resumable_checkpoint(
+                checkpoint_dir=effective_checkpoint_dir,
+                run_name=run_name,
+                payload=resume_payload,
+            )
+            print(
+                f"Saved intermediate checkpoint at step {total_steps}: "
+                f"policy={policy_path} resume={resume_path}"
+            )
+            next_checkpoint_step = ((total_steps // checkpoint_every_steps) + 1) * checkpoint_every_steps
+
     total_time = time.perf_counter() - start_time
-    final_return = np.mean(episode_returns[-100:]) if episode_returns else 0
+    final_return = float(np.mean(episode_returns)) if episode_returns else 0
     final_metrics = {"sps": total_steps/total_time, "llm_calls": llm_calls, "final_return": final_return}
     if save_policy:
-        save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics)
+        save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics, run_metadata)
         print(f"Saved policy checkpoint: {save_path}")
         final_metrics["policy_path"] = save_path
+        final_resume_payload = {
+            "mode": "with_llm",
+            "run_name": run_name,
+            "total_steps": int(total_steps),
+            "update_idx": int(config["NUM_UPDATES"]),
+            "llm_calls": int(llm_calls),
+            "steps_since_llm": int(steps_since_llm),
+            "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
+            "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
+            "obs": np.asarray(jax.device_get(obs)),
+            "rng": np.asarray(jax.device_get(rng)),
+            "hidden_states": np.asarray(jax.device_get(hidden_states)),
+            "episode_returns_tail": list(episode_returns),
+            "lifetime_any_unlocked": None
+            if lifetime_any_unlocked is None
+            else np.asarray(lifetime_any_unlocked, dtype=bool),
+            "lifetime_slot_unlocked": None
+            if lifetime_slot_unlocked is None
+            else np.asarray(lifetime_slot_unlocked, dtype=bool),
+            "saved_policy_path": save_path,
+        }
+        final_resume_path = _save_resumable_checkpoint(
+            checkpoint_dir=effective_checkpoint_dir,
+            run_name=run_name,
+            payload=final_resume_payload,
+        )
+        final_metrics["resume_path"] = final_resume_path
+        print(f"Saved resumable checkpoint: {final_resume_path}")
     print(f"\nDone. SPS: {total_steps/total_time:,.0f}, LLM calls: {llm_calls}, Return: {final_return:.1f}")
     return final_metrics
 
@@ -741,6 +1115,31 @@ def main():
     parser.add_argument("--layer", type=int, default=-1)
     parser.add_argument("--tokens", type=int, default=1)
     parser.add_argument("--model", type=str, default=Config.MODEL_ID)
+    parser.add_argument(
+        "--fusion-mode",
+        type=str,
+        default="concat_raw",
+        choices=["concat_raw", "gated_proj", "residual_gated", "dual_concat"],
+        help="Hidden-state fusion architecture for ActorCriticAug.",
+    )
+    parser.add_argument(
+        "--hidden-gate-init-logit",
+        type=float,
+        default=-4.0,
+        help="Initial logit for hidden-state gate when using gated fusion modes.",
+    )
+    parser.add_argument(
+        "--actor-head-layers",
+        type=int,
+        default=1,
+        help="Number of hidden layers in actor head after fusion.",
+    )
+    parser.add_argument(
+        "--critic-head-layers",
+        type=int,
+        default=2,
+        help="Number of hidden layers in critic head after fusion.",
+    )
     parser.add_argument("--use-wandb", action="store_true", default=True)
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--wandb-project", type=str, default=Config.WANDB_PROJECT)
@@ -748,24 +1147,68 @@ def main():
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save-policy", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--policy-save-dir", type=str, default="checkpoints/online_rl_hidden_jax")
+    parser.add_argument("--policy-save-dir", type=str, default="/data/group_data/rl/geney/online_rl_hidden_models")
+    parser.add_argument(
+        "--checkpoint-every-steps",
+        type=int,
+        default=10_000_000,
+        help="Save intermediate checkpoints every N env steps (0 disables periodic checkpointing).",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Optional directory for resumable checkpoints. Defaults to --policy-save-dir.",
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume from a checkpoint file or a checkpoint directory containing latest_resume.json.",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Optional explicit run name. Defaults to online-jax-{envs}env-{mode}.",
+    )
     args = parser.parse_args()
+
+    if args.checkpoint_every_steps < 0:
+        parser.error("--checkpoint-every-steps must be >= 0")
 
     use_wandb = args.use_wandb and not args.no_wandb
     mode_str = "no-llm" if args.no_llm else f"skip{args.skip_n}"
-    run_name = f"online-jax-{args.envs}env-{mode_str}"
+    run_name = args.run_name or f"online-jax-{args.envs}env-{mode_str}"
+    policy_save_dir = os.path.expanduser(args.policy_save_dir)
+    checkpoint_dir = os.path.expanduser(args.checkpoint_dir) if args.checkpoint_dir else None
+    resume_from = os.path.expanduser(args.resume_from) if args.resume_from else None
+    run_metadata = {
+        "argv": vars(args),
+        "run_name": run_name,
+        "timestamp": datetime.now().isoformat(),
+        "hostname": os.uname().nodename if hasattr(os, "uname") else "",
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "slurm_job_name": os.environ.get("SLURM_JOB_NAME"),
+        "git_commit": os.environ.get("GIT_COMMIT"),
+        "prompt_pipeline": "filter_text_obs(obs_to_text(symbolic_obs))",
+    }
     if use_wandb:
         wandb.init(project=args.wandb_project, entity=args.wandb_entity, name=run_name, config=vars(args))
+        run_metadata["wandb_run_id"] = wandb.run.id if wandb.run is not None else None
+        run_metadata["wandb_run_name"] = wandb.run.name if wandb.run is not None else None
 
     if args.no_llm:
         results = run_training_no_llm(
             args.envs, args.timesteps, args.num_steps, use_wandb, args.seed, not args.quiet,
-            args.save_policy, args.policy_save_dir, run_name
+            args.save_policy, policy_save_dir, run_name, args.checkpoint_every_steps, checkpoint_dir, resume_from, run_metadata
         )
     else:
         results = run_training_with_llm(
-            args.envs, args.timesteps, args.skip_n, args.num_steps, args.model, args.layer, args.tokens, use_wandb, args.seed, not args.quiet,
-            args.save_policy, args.policy_save_dir, run_name
+            args.envs, args.timesteps, args.skip_n, args.num_steps, args.model, args.layer, args.tokens,
+            args.fusion_mode, args.hidden_gate_init_logit, args.actor_head_layers, args.critic_head_layers,
+            use_wandb, args.seed, not args.quiet,
+            args.save_policy, policy_save_dir, run_name, args.checkpoint_every_steps, checkpoint_dir, resume_from, run_metadata
         )
 
     if use_wandb:

@@ -314,10 +314,14 @@ class LLMHiddenStateExtractor:
             ).to(self.model.device)
             
             with torch.no_grad():
-                outputs = self.model(
+                # Avoid CausalLM logits allocation for no-CoT extraction.
+                # Calling the backbone model directly significantly lowers memory.
+                backbone = self.model.model if hasattr(self.model, "model") else self.model
+                outputs = backbone(
                     **inputs,
                     output_hidden_states=True,
                     return_dict=True,
+                    use_cache=False,
                 )
             
             # Pre-norm: use [-2] to get the last transformer layer output BEFORE
@@ -430,19 +434,28 @@ class VLLMHiddenStateExtractor:
         print(f"  target_layer: {target_layer} (of {num_extracted_layers})")
 
     def _send_request(self, prompt: str, max_tokens: int = 1, temperature: float = 0.0) -> dict:
-        """Send a single completion request to the vLLM server."""
-        resp = self._requests.post(
-            f"{self.server_url}/v1/completions",
-            headers={"Content-Type": "application/json"},
-            json={
-                "model": self.model_name,
-                "prompt": prompt,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
+        """Send a single completion request to the vLLM server with retries."""
+        last_error = None
+        for attempt in range(3):
+            try:
+                resp = self._requests.post(
+                    f"{self.server_url}/v1/completions",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": self.model_name,
+                        "prompt": prompt,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    },
+                    timeout=(10, 180),
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError(f"vLLM request failed after retries: {last_error}") from last_error
 
     def _get_hidden_state_path(self, result: dict) -> Optional[str]:
         """Extract hidden states file path from response."""
@@ -464,9 +477,33 @@ class VLLMHiddenStateExtractor:
         if not path or not os.path.exists(path):
             return None
 
-        # Use numpy framework to avoid torch dependency
-        with safe_open(path, framework="numpy") as f:
-            hs = f.get_tensor("hidden_states")  # [num_layers, seq_len, hidden_size]
+        hs = None
+        last_error = None
+        for _ in range(3):
+            try:
+                if TORCH_AVAILABLE:
+                    # Prefer pt loader: robust for bfloat16 tensors.
+                    with safe_open(path, framework="pt") as f:
+                        hs = f.get_tensor("hidden_states").to(torch.float32).cpu().numpy()
+                else:
+                    with safe_open(path, framework="numpy") as f:
+                        hs = f.get_tensor("hidden_states")  # [num_layers, seq_len, hidden_size]
+                break
+            except (OSError, EOFError, ValueError) as exc:
+                # Handles stale file handle/truncated write races from shared FS.
+                last_error = exc
+                time.sleep(0.1)
+            except Exception as exc:
+                last_error = exc
+                time.sleep(0.1)
+
+        if hs is None:
+            print(f"WARNING: Failed to load hidden state from {path}: {last_error}")
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return None
 
         # Select target layer, last token
         result = hs[self.target_layer, -1, :].astype(np.float32)
@@ -518,10 +555,20 @@ class VLLMHiddenStateExtractor:
             # Send concurrent requests
             workers = min(self.max_workers, len(batch_prompts))
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                results = list(pool.map(self._send_request, batch_prompts))
+                futures = [pool.submit(self._send_request, prompt) for prompt in batch_prompts]
+                results = []
+                for fut in futures:
+                    try:
+                        results.append(fut.result())
+                    except Exception as exc:
+                        print(f"WARNING: request failed: {exc}")
+                        results.append(None)
             
             # Extract hidden states from responses
             for result in results:
+                if result is None:
+                    all_hidden.append(np.zeros(self.hidden_size, dtype=np.float32))
+                    continue
                 hs_path = self._get_hidden_state_path(result)
                 hs = self._load_hidden_state(hs_path)
                 if hs is not None:
@@ -595,12 +642,24 @@ class VLLMHiddenStateExtractor:
             # Send concurrent requests with generation
             workers = min(self.max_workers, len(batch_prompts))
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                # Use lambda to pass additional args
-                send_fn = lambda p: self._send_request(p, max_tokens=max_new_tokens, temperature=0.7)
-                results = list(pool.map(send_fn, batch_prompts))
+                futures = [
+                    pool.submit(self._send_request, prompt, max_new_tokens, 0.7)
+                    for prompt in batch_prompts
+                ]
+                results = []
+                for fut in futures:
+                    try:
+                        results.append(fut.result())
+                    except Exception as exc:
+                        print(f"WARNING: generation request failed: {exc}")
+                        results.append(None)
 
             # Extract hidden states and text from responses
             for result in results:
+                if result is None:
+                    all_hidden.append(np.zeros(self.hidden_size, dtype=np.float32))
+                    all_texts.append("")
+                    continue
                 # Get hidden state
                 hs_path = self._get_hidden_state_path(result)
                 hs = self._load_hidden_state(hs_path)
@@ -647,4 +706,3 @@ class VLLMHiddenStateExtractor:
             "total_time_s": self.total_time,
             "samples_per_sec": self.total_samples / max(0.001, self.total_time),
         }
-

@@ -29,6 +29,7 @@ mkdir -p logs
 cd ~/Craftax_Baselines
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
+export GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 if ! command -v conda >/dev/null 2>&1; then
     echo "ERROR: conda not found after sourcing bashrc"
@@ -61,6 +62,16 @@ SKIP_N=${3:-1}
 LAYER=${4:--1}  # Which layer to extract (-1 for last available)
 TOKENS=${5:-1}  # How many tokens to generate (1 for prompt-only)
 NUM_STEPS=${6:-64}
+CHECKPOINT_EVERY_STEPS=${7:-10000000}
+POLICY_SAVE_DIR=${8:-/data/group_data/rl/geney/online_rl_hidden_models}
+CHECKPOINT_DIR=${9:-}
+RESUME_FROM=${10:-}
+FUSION_MODE=${FUSION_MODE:-concat_raw}
+HIDDEN_GATE_INIT_LOGIT=${HIDDEN_GATE_INIT_LOGIT:--4.0}
+ACTOR_HEAD_LAYERS=${ACTOR_HEAD_LAYERS:-1}
+CRITIC_HEAD_LAYERS=${CRITIC_HEAD_LAYERS:-2}
+NO_LLM=${NO_LLM:-0}
+RUN_NAME=${RUN_NAME:-}
 
 echo "========================================"
 echo "Online RL with vLLM Hidden States (JAX)"
@@ -76,6 +87,19 @@ echo "Skip-N: $SKIP_N (LLM inference every $SKIP_N steps)"
 echo "Num-steps/update: $NUM_STEPS"
 echo "Extract layer: $LAYER"
 echo "Tokens to generate: $TOKENS"
+echo "Fusion mode: $FUSION_MODE"
+echo "Hidden gate init logit: $HIDDEN_GATE_INIT_LOGIT"
+echo "Actor head layers: $ACTOR_HEAD_LAYERS"
+echo "Critic head layers: $CRITIC_HEAD_LAYERS"
+echo "No LLM mode: $NO_LLM"
+echo "Policy save dir: $POLICY_SAVE_DIR"
+echo "Checkpoint every steps: $CHECKPOINT_EVERY_STEPS"
+if [[ -n "${CHECKPOINT_DIR}" ]]; then
+    echo "Checkpoint dir: $CHECKPOINT_DIR"
+fi
+if [[ -n "${RESUME_FROM}" ]]; then
+    echo "Resume from: $RESUME_FROM"
+fi
 echo ""
 
 VLLM_PID=""
@@ -87,41 +111,45 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Start vLLM server in background
-echo "Starting vLLM server..."
-activate_conda_for "vllm-server" \
-    /data/user_data/geney/.conda/envs/craftax_fast_llm \
-    craftax_fast_llm \
-    base
-bash scripts/start_vllm_hidden.sh --mode last_token > logs/vllm_server_jax_${SLURM_JOB_ID}.log 2>&1 &
-VLLM_PID=$!
+if [[ "${NO_LLM}" != "1" ]]; then
+    # Start vLLM server in background
+    echo "Starting vLLM server..."
+    activate_conda_for "vllm-server" \
+        /data/user_data/geney/.conda/envs/craftax_fast_llm \
+        craftax_fast_llm \
+        base
+    bash scripts/start_vllm_hidden.sh --mode last_token > logs/vllm_server_jax_${SLURM_JOB_ID}.log 2>&1 &
+    VLLM_PID=$!
 
-# Wait for server to be ready (no timeout - will wait as long as needed)
-echo "Waiting for vLLM server to initialize (this can take several minutes)..."
-echo "The server needs to load all model shards before starting..."
-SECONDS=0
-while true; do
-    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-        echo "✅ vLLM server ready after $SECONDS seconds!"
-        break
-    fi
+    # Wait for server to be ready (no timeout - will wait as long as needed)
+    echo "Waiting for vLLM server to initialize (this can take several minutes)..."
+    echo "The server needs to load all model shards before starting..."
+    SECONDS=0
+    while true; do
+        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+            echo "✅ vLLM server ready after $SECONDS seconds!"
+            break
+        fi
 
-    # Check if the vLLM process is still running
-    if ! kill -0 $VLLM_PID 2>/dev/null; then
-        echo "❌ ERROR: vLLM server process died unexpectedly"
-        echo "Showing last 50 lines of server log:"
-        tail -50 logs/vllm_server_jax_${SLURM_JOB_ID}.log
-        exit 1
-    fi
+        # Check if the vLLM process is still running
+        if ! kill -0 $VLLM_PID 2>/dev/null; then
+            echo "❌ ERROR: vLLM server process died unexpectedly"
+            echo "Showing last 50 lines of server log:"
+            tail -50 logs/vllm_server_jax_${SLURM_JOB_ID}.log
+            exit 1
+        fi
 
-    sleep 2
-    if [ $((SECONDS % 30)) -eq 0 ] && [ $SECONDS -gt 0 ]; then
-        echo "  Still waiting... ($SECONDS seconds elapsed)"
-        # Show a snippet of the log to see progress
-        echo "  Latest from server log:"
-        tail -3 logs/vllm_server_jax_${SLURM_JOB_ID}.log | sed 's/^/    /'
-    fi
-done
+        sleep 2
+        if [ $((SECONDS % 30)) -eq 0 ] && [ $SECONDS -gt 0 ]; then
+            echo "  Still waiting... ($SECONDS seconds elapsed)"
+            # Show a snippet of the log to see progress
+            echo "  Latest from server log:"
+            tail -3 logs/vllm_server_jax_${SLURM_JOB_ID}.log | sed 's/^/    /'
+        fi
+    done
+else
+    echo "NO_LLM=1 set: skipping vLLM server startup."
+fi
 
 # Switch to craftax environment for JAX training (has distrax)
 echo ""
@@ -134,15 +162,35 @@ activate_conda_for "training" \
 # Run JAX version
 echo "Starting JAX training..."
 echo "========================================"
-python -u online_rl_llm/online_rl_hidden_jax.py \
-    --envs $ENVS \
-    --timesteps $TIMESTEPS \
-    --skip-n $SKIP_N \
-    --num-steps $NUM_STEPS \
-    --layer $LAYER \
-    --tokens $TOKENS \
-    --wandb-project craftax-online-rl-llm \
+PY_ARGS=(
+    --envs "$ENVS"
+    --timesteps "$TIMESTEPS"
+    --skip-n "$SKIP_N"
+    --num-steps "$NUM_STEPS"
+    --layer "$LAYER"
+    --tokens "$TOKENS"
+    --fusion-mode "$FUSION_MODE"
+    --hidden-gate-init-logit "$HIDDEN_GATE_INIT_LOGIT"
+    --actor-head-layers "$ACTOR_HEAD_LAYERS"
+    --critic-head-layers "$CRITIC_HEAD_LAYERS"
+    --policy-save-dir "$POLICY_SAVE_DIR"
+    --checkpoint-every-steps "$CHECKPOINT_EVERY_STEPS"
+    --wandb-project craftax-online-rl-llm
     --wandb-entity iris-sobolmark
+)
+if [[ -n "${CHECKPOINT_DIR}" ]]; then
+    PY_ARGS+=(--checkpoint-dir "$CHECKPOINT_DIR")
+fi
+if [[ -n "${RESUME_FROM}" ]]; then
+    PY_ARGS+=(--resume-from "$RESUME_FROM")
+fi
+if [[ "${NO_LLM}" == "1" ]]; then
+    PY_ARGS+=(--no-llm)
+fi
+if [[ -n "${RUN_NAME}" ]]; then
+    PY_ARGS+=(--run-name "$RUN_NAME")
+fi
+python -u online_rl_llm/online_rl_hidden_jax.py "${PY_ARGS[@]}"
 
 echo ""
 echo "Done! Date: $(date)"

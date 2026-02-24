@@ -593,3 +593,75 @@ Evaluate value function on curated observation states to understand what the LLM
   - `squeue -u geney`
 - Validate completion:
   - compare counts of `trajectories_batch_*.npz` in source vs labelled results.
+
+## 2026-02-24: Online RL Resumable Checkpoints + Augmentation Architecture Sweep + Eval/Probe Tooling
+
+### Online RL training stack (`online_rl_llm/online_rl_hidden_jax.py`)
+- Added periodic checkpoint snapshots for policy params (`*.msgpack` + `*.json`) with configurable cadence:
+  - `--checkpoint-every-steps`
+  - `--policy-save-dir`
+- Added resumable training checkpoints (`*.pkl`) with stateful resume support:
+  - `--checkpoint-dir`
+  - `--resume-from` (file or directory with `latest_resume.json`)
+- Resume payload now includes:
+  - train state + env state
+  - RNG, observation buffer, hidden-state buffer (LLM mode)
+  - counters (`total_steps`, `update_idx`, `llm_calls`, `steps_since_llm`)
+  - rolling episode-return tail for stable metrics continuity.
+- Added run metadata persistence into checkpoint JSON:
+  - argv/config, timestamp, hostname, SLURM job metadata, git commit, W&B run ids.
+
+### Augmented architecture controls
+- Extended `models/actor_critic.py::ActorCriticAug` with configurable fusion/backbone modes:
+  - `concat_raw` (legacy)
+  - `gated_proj` (layernorm + projected hidden + learned scalar gate)
+  - `residual_gated` (gated residual into embedding)
+  - `dual_concat` (no shared obs backbone: separate actor/critic obs and hidden paths, concat per head)
+- Added configurable depth knobs for post-fusion heads:
+  - `actor_head_layers`
+  - `critic_head_layers`
+- Added CLI wiring in online JAX trainer:
+  - `--fusion-mode`
+  - `--hidden-gate-init-logit`
+  - `--actor-head-layers`
+  - `--critic-head-layers`
+
+### Online JAX sbatch launcher updates (`scripts/sbatch/run_online_rl_hidden_jax.sbatch`)
+- Added full passthrough for checkpoint/resume/fusion settings.
+- Added `NO_LLM=1` mode to skip vLLM startup cleanly while reusing same training script.
+- Added `RUN_NAME` override and `GIT_COMMIT` export for provenance.
+
+### Hidden-state extraction robustness (`utils/llm_extractor.py`)
+- vLLM request path now retries with bounded timeouts to avoid transient request failures taking down jobs.
+- Hidden-state load path now supports bfloat16 safetensor payloads robustly:
+  - prefers `framework="pt"` (when torch available), then converts to float32 numpy.
+- Added retry around hidden-state file loads to handle shared-filesystem race/truncation/stale-handle events.
+- On per-request failures during batched extraction, falls back to zero hidden vectors rather than crashing whole worker/eval.
+- Local HF extraction path now calls model backbone directly and disables cache for lower memory pressure in no-CoT extraction.
+
+### New symbolic eval + diagnostics scripts
+- Added policy-suite evaluator:
+  - `scripts/eval_symbolic_policy_suite.py`
+  - compares skip-25 augmented, skip-100M baseline, and PPO baseline under a unified 128-episode protocol.
+  - logs per-policy metrics, training metadata, and rollout video to W&B project `craftax_symbolic_evals`.
+  - rollout HUD updated to keep text compact and above gameplay region; includes LLM text line and empirical RTG vs predicted value curve overlays.
+- Added cluster launcher:
+  - `scripts/sbatch/run_symbolic_policy_evals.sbatch`
+  - handles optional vLLM startup and stages eval temp/cache paths onto `/scratch`.
+- Added offline augmented eval entrypoint + sbatch:
+  - `scripts/eval_offline_llm_symbolic.py`
+  - `scripts/sbatch/run_eval_offline_llm_symbolic.sbatch`
+
+### New offline value-probe tooling
+- Added paired-state probe generator:
+  - `offline_rl/generate_value_probe_pairs.py`
+- Added pairwise monotonicity/value-order diagnostics:
+  - `offline_rl/analyze_value_pairs.py`
+- Added dataset-level value-vs-RTG diagnostics:
+  - `offline_rl/analyze_value_learning.py`
+- Added paired AWR launcher helper:
+  - `scripts/sbatch/launch_offline_awr_pair.sh`
+
+### Local analysis artifact added
+- `analysis/value_probe_pairs_seed42_smoke/`:
+  - generated smoke-test probe states/vectors and summaries used to validate pair-analysis workflow.

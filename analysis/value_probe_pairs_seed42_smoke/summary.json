@@ -1,0 +1,7 @@
+{
+  "output_dir": "analysis/value_probe_pairs_seed42_smoke",
+  "num_base_states": 16,
+  "pairs_per_state": 6,
+  "total_pairs": 96,
+  "metadata_file": "analysis/value_probe_pairs_seed42_smoke/pairs.jsonl"
+}

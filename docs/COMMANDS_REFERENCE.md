@@ -104,21 +104,37 @@ sbatch scripts/shell/run_augmented_awr.sh
 
 ### Online RL with LLM Hidden States
 ```bash
-# Start vLLM server first
+# Start vLLM server (for LLM mode)
 bash scripts/start_vllm_hidden.sh --mode last_token
 
-# Basic run with prompt-only mode (fast)
-python online_rl_llm/online_rl_hidden.py --envs 128 --steps 100000 --skip-n 25
+# JAX trainer (current): LLM every 25 env-steps, prefill hidden (tokens=1)
+python online_rl_llm/online_rl_hidden_jax.py \
+    --envs 128 --timesteps 100000000 --skip-n 25 --tokens 1 --layer -1
 
-# With token generation (slower, allows reasoning)
-python online_rl_llm/online_rl_hidden.py --envs 128 --steps 100000 --skip-n 25 --tokens 64
+# No-LLM baseline mode in same stack
+python online_rl_llm/online_rl_hidden_jax.py \
+    --no-llm --envs 128 --timesteps 100000000
 
-# Use specific layer (default is -1 for last)
-python online_rl_llm/online_rl_hidden.py --envs 128 --steps 100000 --skip-n 25 --layer 24
+# Architecture controls
+python online_rl_llm/online_rl_hidden_jax.py \
+    --envs 128 --timesteps 10000000 --skip-n 25 \
+    --fusion-mode dual_concat --actor-head-layers 2 --critic-head-layers 2
 
-# SLURM submission (includes vLLM server startup)
-sbatch scripts/sbatch/run_online_rl_hidden.sbatch 128 100000000 25  # envs steps skip_n
-sbatch scripts/sbatch/run_online_rl_hidden.sbatch 128 100000000 25 -1 64  # with layer and tokens
+# Periodic checkpoints + resumable state
+python online_rl_llm/online_rl_hidden_jax.py \
+    --envs 128 --timesteps 100000000 --skip-n 25 \
+    --checkpoint-every-steps 10000000 \
+    --policy-save-dir /data/group_data/rl/geney/online_rl_hidden_models \
+    --checkpoint-dir /data/group_data/rl/geney/online_rl_hidden_models
+
+# Resume from latest checkpoint in a directory
+python online_rl_llm/online_rl_hidden_jax.py \
+    --resume-from /data/group_data/rl/geney/online_rl_hidden_models \
+    --run-name online-jax-128env-skip25-resumed
+
+# SLURM submission (includes optional vLLM startup)
+sbatch scripts/sbatch/run_online_rl_hidden_jax.sbatch 128 100000000 25 -1 1 64 10000000
+# args: envs timesteps skip_n layer tokens num_steps checkpoint_every_steps
 
 # Clear corrupted vLLM cache if needed
 bash scripts/clear_vllm_cache.sh
@@ -128,27 +144,35 @@ bash scripts/clear_vllm_cache.sh
 
 ## Evaluation
 
-### Baseline AWR
+### Symbolic Policy Suite (W&B `craftax_symbolic_evals`)
 ```bash
-python offline_rl/eval_awr.py \
-    --checkpoint /data/group_data/rl/geney/checkpoints/awr_baseline_v2/awr_checkpoint_100000.pth \
-    --num_episodes 5
+# Local run (evaluates skip25, skip100m, PPO by default)
+python scripts/eval_symbolic_policy_suite.py \
+    --wandb-project craftax_symbolic_evals \
+    --wandb-entity iris-sobolmark \
+    --num-envs 128 \
+    --target-episodes 128
+
+# Cluster run
+sbatch scripts/sbatch/run_symbolic_policy_evals.sbatch
+
+# PPO-only rerun (no vLLM needed)
+START_VLLM=0 sbatch scripts/sbatch/run_symbolic_policy_evals.sbatch --policies ppo_symbolic
 ```
 
-### Augmented AWR (requires VLM server)
+### Offline LLM-Augmented Symbolic Eval
 ```bash
-# 1. Start VLM server
-sbatch scripts/shell/submit_vlm_server.sh
+# Direct script
+python scripts/eval_offline_llm_symbolic.py \
+    --checkpoint /data/group_data/rl/geney/checkpoints/awr_llm_augmented_live/<run>/awr_llm_final.pth \
+    --hidden-input-mode llm \
+    --num-episodes 128 --num-envs 128
 
-# 2. Check logs for hostname (wait ~2 min for model load)
-tail -f logs/vlm_server_*.out
-
-# 3. Run evaluation
-python offline_rl/eval_awr_augmented.py \
-    --checkpoint /data/group_data/rl/geney/checkpoints/awr_augmented/awr_aug_checkpoint_100000.pth \
-    --server_url http://<hostname>:5000 \
-    --stats_path /data/group_data/rl/geney/checkpoints/awr_augmented/hidden_state_stats.npz \
-    --save_video
+# Cluster wrapper
+CHECKPOINT=/data/group_data/rl/geney/checkpoints/awr_llm_augmented_live/<run>/awr_llm_final.pth \
+HIDDEN_INPUT_MODE=llm \
+NO_WANDB=0 \
+sbatch scripts/sbatch/run_eval_offline_llm_symbolic.sbatch
 ```
 
 ---
@@ -190,6 +214,12 @@ python tools/compute_hidden_stats.py \
 
 ### Add Returns to Trajectories
 ```bash
+# Exact RTG recomputation over labelled data
+python tools/ppo_add_returns_exact.py \
+    --input_dir /data/group_data/rl/geney/vllm_craftax_labelled_results \
+    --output_dir /data/group_data/rl/geney/vllm_craftax_labelled_results
+
+# Legacy path (writes to separate output dir)
 python tools/ppo_add_returns.py \
     --input_dir /data/group_data/rl/geney/craftax_labelled_results \
     --output_dir /data/group_data/rl/geney/craftax_labelled_results_with_returns
@@ -199,6 +229,28 @@ python tools/ppo_add_returns.py \
 ```bash
 python tools/collectdatasetstats.py \
     --data_dir /data/group_data/rl/geney/craftax_labelled_results_with_returns
+```
+
+### Value Learning / Probe Diagnostics
+```bash
+# Dataset-level value-vs-RTG metrics for one or more checkpoints
+python offline_rl/analyze_value_learning.py \
+    --checkpoints /data/group_data/rl/geney/checkpoints/awr_llm_augmented_live/<run>/awr_llm_final.pth \
+    --dataset_dir /data/group_data/rl/geney/vllm_craftax_labelled_results \
+    --num_samples 20000 \
+    --hidden_mode real \
+    --output_json logs/value_learning_<tag>.json
+
+# Generate paired probe states
+python offline_rl/generate_value_probe_pairs.py \
+    --output_dir analysis/value_probe_pairs_seed42_smoke \
+    --num_states 64 --seed 42
+
+# Pairwise monotonicity checks (zero/random/llm_no_cot hidden modes)
+python offline_rl/analyze_value_pairs.py \
+    --checkpoints /data/group_data/rl/geney/checkpoints/awr_llm_augmented_live/<run>/awr_llm_final.pth \
+    --hidden_input_mode llm_no_cot \
+    --output_json logs/value_pairs_<tag>.json
 ```
 
 ---
