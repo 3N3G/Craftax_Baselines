@@ -1,8 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=llm_worker
-#SBATCH --partition=preempt
-#SBATCH --qos=preempt_qos             
+#SBATCH --partition=rl
 #SBATCH --array=1-30                   # Default, can be overridden with --array=1-N
 #SBATCH --output=/home/geney/Craftax_Baselines/logs/llm_worker_%A_%a.out
 #SBATCH --error=/home/geney/Craftax_Baselines/logs/llm_worker_%A_%a.err
@@ -10,7 +9,7 @@
 # --- Resource Request ---
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:L40S:1
+#SBATCH --gres=gpu:1
 #
 # --- Optional ---
 #SBATCH --time=24:00:00

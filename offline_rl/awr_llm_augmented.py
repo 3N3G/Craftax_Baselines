@@ -3,8 +3,13 @@ import glob
 import argparse
 import numpy as np
 import concurrent.futures
-import wandb
 import time
+from typing import Tuple
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 # --- FIX: Prevent Import Hangs / Deadlocks on Clusters ---
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -18,13 +23,18 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
 
-import jax
+try:
+    import jax  # noqa: F401
+except ImportError:
+    jax = None
 
 # ==============================================================================
 # 1. Configuration
 # ==============================================================================
 class Config:
-    DATA_DIR = "/data/group_data/rl/geney/craftax_llm_labelled_results"
+    # Default to the actively-growing labelling output so offline experiments can
+    # start before full labelling completion.
+    DATA_DIR = "/data/group_data/rl/geney/vllm_craftax_labelled_results"
     DATA_GLOB = "trajectories_batch_*.npz"
 
     # Model
@@ -32,8 +42,13 @@ class Config:
     LAYER_WIDTH = 512
     HIDDEN_STATE_DIM = 2560  # LLM hidden state dimension
     OBS_DIM = 1345 # Symbolic observation size (check this)
+    HIDDEN_MODE = "real"  # real | zero | shuffle
+    FUSION_MODE = "concat_raw"  # concat_raw | gated_proj | residual_gated
+    HIDDEN_GATE_INIT_LOGIT = -4.0
+    ADVANTAGE_MODE = "center"  # raw | center | standardize
 
     GAMMA = 0.99
+    NUM_ENVS = 128
     AWR_BETA = 10.0
     AWR_MAX_WEIGHT = 20.0
     LR = 3e-4
@@ -46,10 +61,51 @@ class Config:
     SAVE_FREQ = 25000
     SAVE_DIR = "/data/group_data/rl/geney/checkpoints/awr_llm_augmented/"
     SEED = 42
+    MAX_DATASET_GB = 80.0
 
     # Wandb
     WANDB_PROJECT = "craftax-offline-awr"
     WANDB_ENTITY = "iris-sobolmark"
+
+
+def compute_return_to_go(
+    rewards: np.ndarray,
+    dones: np.ndarray,
+    gamma: float,
+    num_envs: int,
+) -> Tuple[np.ndarray, int]:
+    """
+    Compute return-to-go for flattened trajectories.
+    If shape matches interleaved multi-env rollout, compute per-env RTG exactly.
+    Otherwise, fall back to single-stream RTG.
+    """
+    rewards = np.asarray(rewards, dtype=np.float32).reshape(-1)
+    dones = np.asarray(dones, dtype=np.float32).reshape(-1)
+
+    if rewards.shape[0] != dones.shape[0]:
+        raise ValueError(
+            f"reward/done length mismatch: {rewards.shape[0]} vs {dones.shape[0]}"
+        )
+
+    if num_envs > 1 and rewards.shape[0] % num_envs == 0:
+        rewards_mat = rewards.reshape(-1, num_envs)
+        dones_mat = dones.reshape(-1, num_envs)
+        returns_mat = np.zeros_like(rewards_mat, dtype=np.float32)
+
+        next_return = np.zeros(num_envs, dtype=np.float32)
+        for t in reversed(range(rewards_mat.shape[0])):
+            next_return = rewards_mat[t] + gamma * next_return * (1.0 - dones_mat[t])
+            returns_mat[t] = next_return
+        truncated_streams = int(np.sum(dones_mat[-1] < 0.5))
+        return returns_mat.reshape(-1), truncated_streams
+
+    returns = np.zeros_like(rewards, dtype=np.float32)
+    next_return = 0.0
+    for t in reversed(range(rewards.shape[0])):
+        next_return = rewards[t] + gamma * next_return * (1.0 - dones[t])
+        returns[t] = next_return
+    truncated_streams = int(dones[-1] < 0.5)
+    return returns, truncated_streams
 
 
 # ==============================================================================
@@ -65,8 +121,18 @@ class ActorCriticAug(nn.Module):
     Symbolic MLP encoder + LLM hidden state augmentation.
     Matches the JAX architecture in models/actor_critic.py
     """
-    def __init__(self, obs_dim, action_dim, layer_width, hidden_state_dim):
+    def __init__(
+        self,
+        obs_dim,
+        action_dim,
+        layer_width,
+        hidden_state_dim,
+        fusion_mode="concat_raw",
+        hidden_gate_init_logit=-4.0,
+    ):
         super().__init__()
+        self.fusion_mode = fusion_mode
+        self.hidden_gate_init_logit = hidden_gate_init_logit
 
         # MLP Encoder for symbolic observations
         # Matches ActorCritic in models/actor_critic.py (3 layers of 512)
@@ -75,7 +141,32 @@ class ActorCriticAug(nn.Module):
         self.encoder_fc3 = nn.Linear(layer_width, layer_width)
 
         # Fusion
-        self.combined_dim = layer_width + hidden_state_dim
+        if self.fusion_mode == "concat_raw":
+            self.combined_dim = layer_width + hidden_state_dim
+            self.hidden_ln = None
+            self.hidden_proj = None
+            self.hidden_gate_logit = None
+        elif self.fusion_mode == "gated_proj":
+            self.hidden_ln = nn.LayerNorm(hidden_state_dim)
+            self.hidden_proj = nn.Linear(hidden_state_dim, layer_width)
+            self.hidden_gate_logit = nn.Parameter(
+                torch.tensor(float(hidden_gate_init_logit), dtype=torch.float32)
+            )
+            self.combined_dim = layer_width + layer_width
+        elif self.fusion_mode == "residual_gated":
+            self.hidden_ln = nn.LayerNorm(hidden_state_dim)
+            self.hidden_proj = nn.Linear(hidden_state_dim, layer_width)
+            self.hidden_gate_logit = nn.Parameter(
+                torch.tensor(float(hidden_gate_init_logit), dtype=torch.float32)
+            )
+            # Residual fusion keeps actor/critic input shape identical to the
+            # obs-only baseline so gate->0 cleanly recovers baseline behavior.
+            self.combined_dim = layer_width
+        else:
+            raise ValueError(
+                f"Unknown fusion_mode={fusion_mode}. "
+                "Expected one of: concat_raw, gated_proj, residual_gated."
+            )
 
         # Actor head
         self.actor_fc1 = nn.Linear(self.combined_dim, layer_width)
@@ -94,6 +185,8 @@ class ActorCriticAug(nn.Module):
         orthogonal_init(self.encoder_fc1, gain=np.sqrt(2))
         orthogonal_init(self.encoder_fc2, gain=np.sqrt(2))
         orthogonal_init(self.encoder_fc3, gain=np.sqrt(2))
+        if self.hidden_proj is not None:
+            orthogonal_init(self.hidden_proj, gain=np.sqrt(2))
         
         orthogonal_init(self.actor_fc1, gain=np.sqrt(2))
         orthogonal_init(self.actor_fc2, gain=0.01)
@@ -109,8 +202,23 @@ class ActorCriticAug(nn.Module):
         x = F.tanh(self.encoder_fc2(x))
         x = F.tanh(self.encoder_fc3(x))
 
-        # Concatenate with hidden state
-        combined = torch.cat([x, hidden_state], dim=1)
+        if self.fusion_mode == "concat_raw":
+            combined = torch.cat([x, hidden_state], dim=1)
+        elif self.fusion_mode == "gated_proj":
+            hidden_proc = self.hidden_ln(hidden_state)
+            hidden_proc = torch.tanh(self.hidden_proj(hidden_proc))
+            hidden_gate = torch.sigmoid(self.hidden_gate_logit)
+            combined = torch.cat([x, hidden_gate * hidden_proc], dim=1)
+        elif self.fusion_mode == "residual_gated":
+            hidden_proc = self.hidden_ln(hidden_state)
+            hidden_proc = torch.tanh(self.hidden_proj(hidden_proc))
+            hidden_gate = torch.sigmoid(self.hidden_gate_logit)
+            combined = x + hidden_gate * hidden_proc
+        else:
+            raise ValueError(
+                f"Unknown fusion_mode={self.fusion_mode}. "
+                "Expected one of: concat_raw, gated_proj, residual_gated."
+            )
 
         # Actor
         actor_x = F.tanh(self.actor_fc1(combined))
@@ -130,14 +238,55 @@ class ActorCriticAug(nn.Module):
 # 3. Dataset Loader (Augmented with Hidden States)
 # ==============================================================================
 class OfflineDatasetLLMAugmented:
-    def __init__(self, data_dir, file_pattern):
+    def __init__(
+        self,
+        data_dir,
+        file_pattern,
+        max_files=None,
+        num_envs=128,
+        compute_missing_returns=True,
+        max_workers=8,
+        hidden_mode="real",
+        max_dataset_gb=80.0,
+        auto_file_limit=True,
+        min_rtg_quantile=0.0,
+    ):
+        if hidden_mode not in {"real", "zero", "shuffle"}:
+            raise ValueError(
+                f"Unsupported hidden_mode={hidden_mode}. Expected one of: real, zero, shuffle."
+            )
+
         search_path = os.path.join(data_dir, file_pattern)
         files = glob.glob(search_path)
         if not files:
             raise ValueError(f"No files found at {search_path}")
 
         files = sorted(files)
+        if max_files is not None:
+            files = files[:max_files]
         print(f"Found {len(files)} LLM-labelled files.")
+        print(f"Hidden mode: {hidden_mode}")
+
+        if len(files) == 0:
+            raise ValueError(f"No files found at {search_path}")
+
+        # Find observation dimension from first readable file
+        first_readable_file = None
+        for f in files:
+            try:
+                with np.load(f, mmap_mode="r") as d:
+                    obs_shape = d["obs"].shape
+                    Config.OBS_DIM = np.prod(obs_shape[1:])
+                    first_readable_file = f
+                    print(
+                        f"Observation dimension: {Config.OBS_DIM} "
+                        f"(shape: {obs_shape[1:]})"
+                    )
+                    break
+            except Exception:
+                continue
+        if first_readable_file is None:
+            raise ValueError("No readable files with `obs` found in dataset.")
 
         # Count total samples
         total_samples = 0
@@ -151,23 +300,79 @@ class OfflineDatasetLLMAugmented:
             except Exception as e:
                 print(f"Skipping corrupt file {f}: {e}")
 
-        print(f"Allocating buffers for {total_samples} samples...")
+        if len(file_info) == 0:
+            raise ValueError("No valid files remained after loading metadata.")
 
-        # Find observation dimension from first file
-        with np.load(file_info[0][0]) as d:
-            obs_shape = d["obs"].shape
-            Config.OBS_DIM = np.prod(obs_shape[1:])
-            print(f"Observation dimension: {Config.OBS_DIM} (shape: {obs_shape[1:]})")
+        def estimate_buffer_gb(sample_count: int) -> float:
+            # Arrays held in memory: obs(float32), hidden_state(float32),
+            # reward/done/return_to_go(float32), action(int32).
+            bytes_per_sample = (
+                4 * Config.OBS_DIM
+                + 4 * Config.HIDDEN_STATE_DIM
+                + 3 * 4
+                + 4
+            )
+            return (sample_count * bytes_per_sample) / (1024 ** 3)
+
+        estimated_gb = estimate_buffer_gb(total_samples)
+        print(f"Estimated in-memory dataset footprint: {estimated_gb:.2f} GiB")
+
+        if max_dataset_gb is not None and estimated_gb > max_dataset_gb:
+            if auto_file_limit:
+                original_files = len(file_info)
+                original_samples = total_samples
+                limited_file_info = []
+                limited_samples = 0
+                for info in file_info:
+                    next_samples = limited_samples + info[1]
+                    if (
+                        len(limited_file_info) > 0
+                        and estimate_buffer_gb(next_samples) > max_dataset_gb
+                    ):
+                        break
+                    limited_file_info.append(info)
+                    limited_samples = next_samples
+
+                if len(limited_file_info) == 0:
+                    raise MemoryError(
+                        "Dataset exceeds memory budget and even one file does not fit. "
+                        f"Estimated memory for first file: {estimate_buffer_gb(file_info[0][1]):.2f} GiB, "
+                        f"budget: {max_dataset_gb:.2f} GiB."
+                    )
+
+                file_info = limited_file_info
+                files = [f for f, _ in file_info]
+                total_samples = limited_samples
+                estimated_gb = estimate_buffer_gb(total_samples)
+                print(
+                    "WARNING: auto-limited files to stay within memory budget. "
+                    f"Using {len(file_info)}/{original_files} files and "
+                    f"{total_samples}/{original_samples} samples "
+                    f"(estimated {estimated_gb:.2f} GiB <= {max_dataset_gb:.2f} GiB)."
+                )
+            else:
+                raise MemoryError(
+                    "Estimated dataset buffers exceed memory budget. "
+                    f"Need ~{estimated_gb:.2f} GiB for {total_samples} samples, "
+                    f"budget is {max_dataset_gb:.2f} GiB. "
+                    "Use --max_files, increase --max_dataset_gb, or enable auto file limiting."
+                )
+
+        print(f"Allocating buffers for {total_samples} samples...")
 
         # Allocate arrays
         self.obs = np.zeros((total_samples, Config.OBS_DIM), dtype=np.float32)
         self.action = np.zeros((total_samples,), dtype=np.int32)
         self.reward = np.zeros((total_samples,), dtype=np.float32)
         self.done = np.zeros((total_samples,), dtype=np.float32)
-        self.hidden_state = np.zeros(
-            (total_samples, Config.HIDDEN_STATE_DIM), dtype=np.float32
+        need_hidden = hidden_mode in {"real", "shuffle"}
+        self.hidden_state = (
+            np.zeros((total_samples, Config.HIDDEN_STATE_DIM), dtype=np.float32)
+            if need_hidden
+            else None
         )
         self.return_to_go = np.zeros((total_samples,), dtype=np.float32)
+        self.hidden_mode = hidden_mode
 
         def load_single_file(args):
             fpath, expected_n = args
@@ -178,23 +383,41 @@ class OfflineDatasetLLMAugmented:
                     if len(raw_obs.shape) > 2:
                         raw_obs = raw_obs.reshape(raw_obs.shape[0], -1)
                     
-                    # Load hidden states
-                    # Note: hidden states from LLM might be (N, seq, dim) or (N, dim)
-                    # Check shape and pool if necessary
-                    raw_hidden = data["hidden_state"]
-                    if len(raw_hidden.shape) == 3:
-                         # (N, seq, dim) -> mean pool
-                        pooled_hidden = np.mean(raw_hidden, axis=1)
+                    pooled_hidden = None
+                    if need_hidden:
+                        # Note: hidden states from LLM might be (N, seq, dim) or (N, dim)
+                        # Check shape and pool if necessary
+                        raw_hidden = data["hidden_state"]
+                        if len(raw_hidden.shape) == 3:
+                            # (N, seq, dim) -> mean pool
+                            pooled_hidden = np.mean(raw_hidden, axis=1)
+                        else:
+                            pooled_hidden = raw_hidden
+
+                    if "return_to_go" in data:
+                        return_to_go = data["return_to_go"].astype(np.float32)
+                        computed_returns = False
+                        truncated_streams = 0
+                    elif compute_missing_returns and "reward" in data and "done" in data:
+                        return_to_go, truncated_streams = compute_return_to_go(
+                            data["reward"], data["done"], Config.GAMMA, num_envs
+                        )
+                        computed_returns = True
                     else:
-                        pooled_hidden = raw_hidden
+                        raise KeyError(
+                            "Missing return_to_go and cannot compute it "
+                            "(require reward/done or enable --compute-missing-returns)."
+                        )
 
                     return {
                         "obs": raw_obs.astype(np.float32),
                         "action": data["action"],
                         "reward": data["reward"].astype(np.float32),
                         "done": data["done"],
-                        "hidden_state": pooled_hidden.astype(np.float32),
-                        "return_to_go": data["return_to_go"].astype(np.float32),
+                        "hidden_state": None if pooled_hidden is None else pooled_hidden.astype(np.float32),
+                        "return_to_go": return_to_go,
+                        "computed_returns": computed_returns,
+                        "truncated_streams": truncated_streams,
                         "count": len(raw_obs),
                     }
             except Exception as e:
@@ -202,9 +425,13 @@ class OfflineDatasetLLMAugmented:
                 return None
 
         # Parallel loading
-        print("Starting parallel load (8 workers)...")
+        print(f"Starting parallel load ({max_workers} workers)...")
         idx = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        loaded_files = 0
+        computed_returns_files = 0
+        truncated_return_files = 0
+        truncated_streams_total = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_file = {
                 executor.submit(load_single_file, info): info for info in file_info
             }
@@ -218,21 +445,79 @@ class OfflineDatasetLLMAugmented:
                 self.action[idx : idx + n] = result["action"]
                 self.reward[idx : idx + n] = result["reward"]
                 self.done[idx : idx + n] = result["done"]
-                self.hidden_state[idx : idx + n] = result["hidden_state"]
+                if self.hidden_state is not None and result["hidden_state"] is not None:
+                    self.hidden_state[idx : idx + n] = result["hidden_state"]
                 self.return_to_go[idx : idx + n] = result["return_to_go"]
                 idx += n
+                loaded_files += 1
+                computed_returns_files += int(result["computed_returns"])
+                if result["truncated_streams"] > 0:
+                    truncated_return_files += 1
+                    truncated_streams_total += int(result["truncated_streams"])
 
         self.size = idx
         print(f"Dataset loaded. Total samples: {self.size}")
-
-        # Compute statistics for monitoring (hidden states might benefit from normalization)
-        self.hidden_mean = np.mean(self.hidden_state[: self.size], axis=0)
-        self.hidden_std = np.std(self.hidden_state[: self.size], axis=0)
-        self.hidden_std = np.where(self.hidden_std < 1e-6, 1.0, self.hidden_std)
         print(
-            f"Hidden state stats - Mean range: [{self.hidden_mean.min():.3f}, {self.hidden_mean.max():.3f}], "
-            f"Std range: [{self.hidden_std.min():.3f}, {self.hidden_std.max():.3f}]"
+            f"Loaded files: {loaded_files}/{len(file_info)} | "
+            f"Computed missing returns for {computed_returns_files} files"
         )
+        if truncated_return_files > 0:
+            print(
+                "WARNING: computed returns were truncated at file boundaries for "
+                f"{truncated_return_files} files "
+                f"({truncated_streams_total} unfinished streams at file end)."
+            )
+        if self.size == 0:
+            raise ValueError("No valid samples were loaded from dataset files.")
+
+        if min_rtg_quantile > 0.0:
+            if not (0.0 < min_rtg_quantile < 100.0):
+                raise ValueError(
+                    f"min_rtg_quantile must be in (0, 100), got {min_rtg_quantile}"
+                )
+            rtg = self.return_to_go[: self.size]
+            threshold = float(np.percentile(rtg, min_rtg_quantile))
+            keep_mask = rtg >= threshold
+            keep_count = int(np.sum(keep_mask))
+            if keep_count == 0:
+                raise ValueError(
+                    "RTG quantile filter removed all samples; "
+                    f"quantile={min_rtg_quantile}, threshold={threshold:.4f}"
+                )
+            print(
+                f"Applied RTG filter at q={min_rtg_quantile:.1f} "
+                f"(threshold={threshold:.4f}); keeping {keep_count}/{self.size} samples."
+            )
+            self.obs = self.obs[: self.size][keep_mask]
+            self.action = self.action[: self.size][keep_mask]
+            self.reward = self.reward[: self.size][keep_mask]
+            self.done = self.done[: self.size][keep_mask]
+            if self.hidden_state is not None:
+                self.hidden_state = self.hidden_state[: self.size][keep_mask]
+            self.return_to_go = self.return_to_go[: self.size][keep_mask]
+            self.size = keep_count
+        else:
+            self.obs = self.obs[: self.size]
+            self.action = self.action[: self.size]
+            self.reward = self.reward[: self.size]
+            self.done = self.done[: self.size]
+            if self.hidden_state is not None:
+                self.hidden_state = self.hidden_state[: self.size]
+            self.return_to_go = self.return_to_go[: self.size]
+
+        # Compute normalization statistics for hidden-state inputs.
+        if self.hidden_state is not None:
+            self.hidden_mean = np.mean(self.hidden_state, axis=0)
+            self.hidden_std = np.std(self.hidden_state, axis=0)
+            self.hidden_std = np.where(self.hidden_std < 1e-6, 1.0, self.hidden_std)
+            print(
+                f"Hidden state stats - Mean range: [{self.hidden_mean.min():.3f}, {self.hidden_mean.max():.3f}], "
+                f"Std range: [{self.hidden_std.min():.3f}, {self.hidden_std.max():.3f}]"
+            )
+        else:
+            self.hidden_mean = np.zeros((Config.HIDDEN_STATE_DIM,), dtype=np.float32)
+            self.hidden_std = np.ones((Config.HIDDEN_STATE_DIM,), dtype=np.float32)
+            print("Hidden mode is zero; skipping hidden-state loading and using zero/one normalization stats.")
 
         # Save normalization statistics for evaluation
         os.makedirs(Config.SAVE_DIR, exist_ok=True)
@@ -250,9 +535,26 @@ class OfflineDatasetLLMAugmented:
         )
 
         # Normalize hidden states
-        hidden_normalized = (
-            self.hidden_state[idx] - self.hidden_mean
-        ) / self.hidden_std
+        if self.hidden_mode == "real":
+            if self.hidden_state is None:
+                hidden_normalized = np.zeros(
+                    (batch_size, Config.HIDDEN_STATE_DIM), dtype=np.float32
+                )
+            else:
+                hidden_normalized = (
+                    self.hidden_state[idx] - self.hidden_mean
+                ) / self.hidden_std
+        elif self.hidden_mode == "zero":
+            hidden_normalized = np.zeros(
+                (batch_size, Config.HIDDEN_STATE_DIM), dtype=np.float32
+            )
+        else:  # shuffle
+            if self.hidden_state is None:
+                raise ValueError("hidden_mode=shuffle requires hidden states to be loaded.")
+            shuffled_idx = np.random.permutation(idx)
+            hidden_normalized = (
+                self.hidden_state[shuffled_idx] - self.hidden_mean
+            ) / self.hidden_std
         hidden_t = torch.tensor(
             hidden_normalized, dtype=torch.float32, device=Config.DEVICE
         )
@@ -272,7 +574,7 @@ class OfflineDatasetLLMAugmented:
 # ==============================================================================
 # 4. Training Step
 # ==============================================================================
-def train_step(model, optimizer, batch):
+def train_step(model, optimizer, batch, advantage_mode: str):
     pi, current_v = model(batch["obs"], batch["hidden_state"])
 
     td_target = batch["return_to_go"]
@@ -283,7 +585,21 @@ def train_step(model, optimizer, batch):
 
     # Actor loss (AWR)
     log_probs = pi.log_prob(batch["action"])
-    weights = torch.exp(advantage.detach() / Config.AWR_BETA)
+    detached_advantage = advantage.detach()
+    if advantage_mode == "raw":
+        weighted_advantage = detached_advantage
+    elif advantage_mode == "center":
+        weighted_advantage = detached_advantage - detached_advantage.mean()
+    elif advantage_mode == "standardize":
+        adv_std = detached_advantage.std(unbiased=False).clamp_min(1e-6)
+        weighted_advantage = (detached_advantage - detached_advantage.mean()) / adv_std
+    else:
+        raise ValueError(
+            f"Unsupported advantage_mode={advantage_mode}. "
+            "Expected one of: raw, center, standardize."
+        )
+
+    weights = torch.exp(weighted_advantage / Config.AWR_BETA)
     weights_clipped = torch.clamp(weights, max=Config.AWR_MAX_WEIGHT)
     actor_loss = -torch.mean(log_probs * weights_clipped)
 
@@ -305,6 +621,9 @@ def train_step(model, optimizer, batch):
         hidden_std = batch["hidden_state"].std().item()
         hidden_min = batch["hidden_state"].min().item()
         hidden_max = batch["hidden_state"].max().item()
+        hidden_gate = None
+        if getattr(model, "hidden_gate_logit", None) is not None:
+            hidden_gate = torch.sigmoid(model.hidden_gate_logit).item()
 
     return {
         "actor_loss": actor_loss.item(),
@@ -319,6 +638,9 @@ def train_step(model, optimizer, batch):
         "hidden_std": hidden_std,
         "hidden_min": hidden_min,
         "hidden_max": hidden_max,
+        "hidden_gate": hidden_gate,
+        "adv_mean": detached_advantage.mean().item(),
+        "adv_std": detached_advantage.std(unbiased=False).item(),
     }
 
 
@@ -328,6 +650,41 @@ def train_step(model, optimizer, batch):
 def parse_args():
     parser = argparse.ArgumentParser(description="LLM-Augmented AWR for Craftax")
     parser.add_argument("--data_dir", type=str, default=Config.DATA_DIR)
+    parser.add_argument("--data_glob", type=str, default=Config.DATA_GLOB)
+    parser.add_argument("--max_files", type=int, default=None)
+    parser.add_argument("--dataset_workers", type=int, default=8)
+    parser.add_argument("--num_envs", type=int, default=Config.NUM_ENVS)
+    parser.add_argument(
+        "--max_dataset_gb",
+        type=float,
+        default=Config.MAX_DATASET_GB,
+        help="Target upper bound for in-memory dataset buffers (GiB).",
+    )
+    parser.add_argument(
+        "--disable_auto_file_limit",
+        action="store_true",
+        help="If set, fail when estimated dataset memory exceeds --max_dataset_gb.",
+    )
+    parser.add_argument(
+        "--hidden_mode",
+        type=str,
+        default=Config.HIDDEN_MODE,
+        choices=["real", "zero", "shuffle"],
+        help="How hidden states are fed during training.",
+    )
+    parser.add_argument(
+        "--fusion_mode",
+        type=str,
+        default=Config.FUSION_MODE,
+        choices=["concat_raw", "gated_proj", "residual_gated"],
+        help="Hidden-state fusion architecture.",
+    )
+    parser.add_argument(
+        "--hidden_gate_init_logit",
+        type=float,
+        default=Config.HIDDEN_GATE_INIT_LOGIT,
+        help="Initial gate logit when --fusion_mode gated_proj.",
+    )
     parser.add_argument("--save_dir", type=str, default=Config.SAVE_DIR)
     parser.add_argument("--total_steps", type=int, default=Config.TOTAL_STEPS)
     parser.add_argument("--batch_size", type=int, default=Config.BATCH_SIZE)
@@ -341,7 +698,33 @@ def parse_args():
         help="Custom WandB run name (default: auto-generated with timestamp)",
     )
     parser.add_argument("--save_freq", type=int, default=Config.SAVE_FREQ)
+    parser.add_argument(
+        "--advantage_mode",
+        type=str,
+        default=Config.ADVANTAGE_MODE,
+        choices=["raw", "center", "standardize"],
+        help="Transform applied to advantages before AWR weighting.",
+    )
+    parser.add_argument(
+        "--min_rtg_quantile",
+        type=float,
+        default=0.0,
+        help="Keep only samples with return_to_go >= this percentile threshold (0 disables).",
+    )
     parser.add_argument("--no_wandb", action="store_true")
+    parser.add_argument(
+        "--compute-missing-returns",
+        dest="compute_missing_returns",
+        action="store_true",
+        help="If return_to_go is missing in a file, compute it from reward/done.",
+    )
+    parser.add_argument(
+        "--require-returns",
+        dest="compute_missing_returns",
+        action="store_false",
+        help="Fail on files missing return_to_go.",
+    )
+    parser.set_defaults(compute_missing_returns=True)
     return parser.parse_args()
 
 
@@ -353,11 +736,17 @@ def main():
 
     # Update config
     Config.DATA_DIR = args.data_dir
+    Config.DATA_GLOB = args.data_glob
     Config.SAVE_DIR = args.save_dir
     Config.TOTAL_STEPS = args.total_steps
     Config.BATCH_SIZE = args.batch_size
     Config.LR = args.lr
     Config.AWR_BETA = args.awr_beta
+    Config.NUM_ENVS = args.num_envs
+    Config.HIDDEN_MODE = args.hidden_mode
+    Config.FUSION_MODE = args.fusion_mode
+    Config.HIDDEN_GATE_INIT_LOGIT = args.hidden_gate_init_logit
+    Config.ADVANTAGE_MODE = args.advantage_mode
     Config.SEED = args.seed
     Config.SAVE_FREQ = args.save_freq
 
@@ -373,6 +762,10 @@ def main():
     os.makedirs(Config.SAVE_DIR, exist_ok=True)
 
     if not args.no_wandb:
+        if wandb is None:
+            raise ImportError(
+                "wandb is not installed in this environment; pass --no_wandb or install wandb."
+            )
         wandb.init(
             project=Config.WANDB_PROJECT,
             entity=Config.WANDB_ENTITY,
@@ -384,14 +777,40 @@ def main():
 
     print(f"Starting LLM-Augmented AWR training with {Config.TOTAL_STEPS} steps")
     print(f"Data: {Config.DATA_DIR}")
+    print(f"Data glob: {Config.DATA_GLOB}")
     print(f"Checkpoints: {Config.SAVE_DIR}")
     print(f"AWR Beta: {Config.AWR_BETA}")
+    print(f"Hidden mode: {Config.HIDDEN_MODE}")
+    print(
+        f"Fusion mode: {Config.FUSION_MODE} "
+        f"(hidden_gate_init_logit={Config.HIDDEN_GATE_INIT_LOGIT})"
+    )
+    print(f"Advantage mode: {Config.ADVANTAGE_MODE}")
+    print(f"RTG filter quantile: {args.min_rtg_quantile}")
+    print(f"Dataset memory budget: {args.max_dataset_gb:.2f} GiB")
+    print(
+        "Auto file limiting: "
+        + ("disabled" if args.disable_auto_file_limit else "enabled")
+    )
+    if args.max_files is not None:
+        print(f"Limiting to first {args.max_files} files")
     
     # Initialize dataset first to determine observation dimension
     print("\n" + "=" * 60)
     print("Loading dataset (this may take several minutes)...")
     print("=" * 60)
-    dataset = OfflineDatasetLLMAugmented(Config.DATA_DIR, Config.DATA_GLOB)
+    dataset = OfflineDatasetLLMAugmented(
+        Config.DATA_DIR,
+        Config.DATA_GLOB,
+        max_files=args.max_files,
+        num_envs=Config.NUM_ENVS,
+        compute_missing_returns=args.compute_missing_returns,
+        max_workers=args.dataset_workers,
+        hidden_mode=args.hidden_mode,
+        max_dataset_gb=args.max_dataset_gb,
+        auto_file_limit=not args.disable_auto_file_limit,
+        min_rtg_quantile=args.min_rtg_quantile,
+    )
     print("\n" + "=" * 60)
     print("Dataset loaded successfully!")
     print("=" * 60)
@@ -402,6 +821,8 @@ def main():
         action_dim=Config.ACTION_DIM,
         layer_width=Config.LAYER_WIDTH,
         hidden_state_dim=Config.HIDDEN_STATE_DIM,
+        fusion_mode=Config.FUSION_MODE,
+        hidden_gate_init_logit=Config.HIDDEN_GATE_INIT_LOGIT,
     ).to(Config.DEVICE)
     print("Model initialized successfully!")
 
@@ -413,7 +834,7 @@ def main():
 
     for step in range(1, Config.TOTAL_STEPS + 1):
         batch = dataset.sample(Config.BATCH_SIZE)
-        metrics = train_step(model, optimizer, batch)
+        metrics = train_step(model, optimizer, batch, Config.ADVANTAGE_MODE)
 
         if step % Config.LOG_FREQ == 0:
             log_dict = {
@@ -422,6 +843,8 @@ def main():
                 "train/mean_weight": metrics["mean_weight"],
                 "train/weight_clip_frac": metrics["weight_clip_frac"],
                 "train/explained_variance": metrics["explained_variance"],
+                "train/adv_mean": metrics["adv_mean"],
+                "train/adv_std": metrics["adv_std"],
                 "value_debug/predicted_value": metrics["mean_value"],
                 "value_debug/actual_return": metrics["mean_return"],
                 "hidden_states/mean": metrics["hidden_mean"],
@@ -431,11 +854,17 @@ def main():
             }
             if not args.no_wandb:
                 wandb.log(log_dict, step=step)
+                if metrics["hidden_gate"] is not None:
+                    wandb.log({"hidden_states/gate": metrics["hidden_gate"]}, step=step)
             if step % (Config.LOG_FREQ * 10) == 0:
+                gate_suffix = ""
+                if metrics["hidden_gate"] is not None:
+                    gate_suffix = f", gate={metrics['hidden_gate']:.4f}"
                 print(
                     f"Step {step}/{Config.TOTAL_STEPS}: actor={metrics['actor_loss']:.4f}, "
                     f"critic={metrics['critic_loss']:.4f}, expl_var={metrics['explained_variance']:.3f}, "
                     f"hidden_mean={metrics['hidden_mean']:.4f}, hidden_std={metrics['hidden_std']:.4f}"
+                    f"{gate_suffix}"
                 )
 
         if step % Config.SAVE_FREQ == 0:
