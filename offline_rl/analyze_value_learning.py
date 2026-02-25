@@ -449,33 +449,56 @@ class JAXValueModel:
         self.hidden_dim = hidden_dim
         meta_path = checkpoint_path.with_suffix(".json")
         self.meta = None
-        use_llm = True
+        preferred_mode = None
         if meta_path.exists():
             try:
                 self.meta = json.loads(meta_path.read_text())
                 argv = self.meta.get("metadata", {}).get("argv", {})
                 if "no_llm" in argv:
-                    use_llm = not bool(argv["no_llm"])
+                    preferred_mode = "base" if bool(argv["no_llm"]) else "aug"
             except Exception:
                 self.meta = None
-        self.use_aug = use_llm
-        if self.use_aug:
-            self.network = ActorCriticAugValueOnly(
-                action_dim=action_dim, layer_width=layer_width, hidden_state_dim=hidden_dim
+
+        ckpt_bytes = checkpoint_path.read_bytes()
+
+        def _build_aug():
+            net = ActorCriticAugValueOnly(
+                action_dim=action_dim,
+                layer_width=layer_width,
+                hidden_state_dim=hidden_dim,
             )
-            template = self.network.init(
+            template = net.init(
                 jax.random.PRNGKey(0),
                 jnp.zeros((1, obs_dim), dtype=jnp.float32),
                 jnp.zeros((1, hidden_dim), dtype=jnp.float32),
             )
-        else:
-            self.network = ActorCriticValueOnly(action_dim=action_dim, layer_width=layer_width)
-            template = self.network.init(
+            params = serialization.from_bytes(template, ckpt_bytes)
+            return net, params, True, "aug"
+
+        def _build_base():
+            net = ActorCriticValueOnly(action_dim=action_dim, layer_width=layer_width)
+            template = net.init(
                 jax.random.PRNGKey(0),
                 jnp.zeros((1, obs_dim), dtype=jnp.float32),
             )
-        ckpt_bytes = checkpoint_path.read_bytes()
-        self.params = serialization.from_bytes(template, ckpt_bytes)
+            params = serialization.from_bytes(template, ckpt_bytes)
+            return net, params, False, "base"
+
+        builders = [_build_aug, _build_base]
+        if preferred_mode == "base":
+            builders = [_build_base, _build_aug]
+
+        load_error = None
+        for build in builders:
+            try:
+                self.network, self.params, self.use_aug, self.load_variant = build()
+                break
+            except Exception as exc:
+                load_error = exc
+        else:
+            raise RuntimeError(
+                f"Failed to deserialize JAX checkpoint with either architecture: {checkpoint_path}"
+            ) from load_error
 
         if self.use_aug:
             @jax.jit
@@ -655,6 +678,7 @@ def main():
                 )
                 details = {
                     "kind": "jax",
+                    "load_variant": model.load_variant,
                     "uses_hidden_input": bool(model.use_aug),
                     "hidden_mode_eval": args.hidden_mode if model.use_aug else "ignored",
                     "metadata_available": model.meta is not None,

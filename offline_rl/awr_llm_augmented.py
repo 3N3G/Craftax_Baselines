@@ -1,9 +1,12 @@
 import os
 import glob
 import argparse
+import hashlib
+import json
 import numpy as np
 import concurrent.futures
 import time
+from datetime import datetime, timezone
 from typing import Tuple
 
 try:
@@ -106,6 +109,79 @@ def compute_return_to_go(
         returns[t] = next_return
     truncated_streams = int(dones[-1] < 0.5)
     return returns, truncated_streams
+
+
+def apply_hidden_skip_schedule(
+    hidden_state: np.ndarray,
+    done: np.ndarray,
+    num_envs: int,
+    skip_n: int,
+    reset_on_done: bool,
+) -> Tuple[np.ndarray, int]:
+    """
+    Hold hidden vectors between refresh steps to emulate online skip_n behavior.
+
+    Args:
+        hidden_state: [N, H] hidden vectors.
+        done: [N] flattened done mask aligned with hidden_state.
+        num_envs: Interleaving factor in flattened stream.
+        skip_n: Refresh cadence. 1 means no hold.
+        reset_on_done: If True, force refresh on first step after terminal.
+
+    Returns:
+        transformed_hidden, refresh_count
+    """
+    if skip_n <= 1:
+        return hidden_state.astype(np.float32, copy=False), int(hidden_state.shape[0])
+    if hidden_state.ndim != 2:
+        raise ValueError(f"Expected hidden_state shape [N,H], got {hidden_state.shape}")
+    hidden_state = hidden_state.astype(np.float32, copy=False)
+    done = np.asarray(done, dtype=np.float32).reshape(-1)
+    n, hidden_dim = hidden_state.shape
+    if done.shape[0] != n:
+        raise ValueError(
+            f"done/hidden length mismatch: done={done.shape[0]} hidden={n}"
+        )
+
+    # Interleaved [time, env, hidden] path (common PPO save format).
+    if num_envs > 1 and (n % num_envs == 0):
+        t_len = n // num_envs
+        hidden_3d = hidden_state.reshape(t_len, num_envs, hidden_dim)
+        done_2d = done.reshape(t_len, num_envs)
+        out = np.empty_like(hidden_3d)
+        last = hidden_3d[0].copy()
+        steps_since_refresh = np.zeros((num_envs,), dtype=np.int32)
+        out[0] = last
+        refresh_count = int(num_envs)
+        for t in range(1, t_len):
+            must_refresh = steps_since_refresh >= (skip_n - 1)
+            if reset_on_done:
+                must_refresh = np.logical_or(must_refresh, done_2d[t - 1] > 0.5)
+            cur = hidden_3d[t]
+            # Refresh per-env where requested; otherwise hold previous hidden.
+            last = np.where(must_refresh[:, None], cur, last)
+            out[t] = last
+            steps_since_refresh = np.where(must_refresh, 0, steps_since_refresh + 1)
+            refresh_count += int(np.sum(must_refresh))
+        return out.reshape(n, hidden_dim), refresh_count
+
+    # Fallback: single stream.
+    out = np.empty_like(hidden_state)
+    out[0] = hidden_state[0]
+    refresh_count = 1
+    steps_since_refresh = 0
+    for i in range(1, n):
+        must_refresh = steps_since_refresh >= (skip_n - 1)
+        if reset_on_done and done[i - 1] > 0.5:
+            must_refresh = True
+        if must_refresh:
+            out[i] = hidden_state[i]
+            steps_since_refresh = 0
+            refresh_count += 1
+        else:
+            out[i] = out[i - 1]
+            steps_since_refresh += 1
+    return out, refresh_count
 
 
 # ==============================================================================
@@ -247,6 +323,8 @@ class OfflineDatasetLLMAugmented:
         compute_missing_returns=True,
         max_workers=8,
         hidden_mode="real",
+        hidden_skip_n=1,
+        hidden_skip_reset_on_done=False,
         max_dataset_gb=80.0,
         auto_file_limit=True,
         min_rtg_quantile=0.0,
@@ -266,6 +344,10 @@ class OfflineDatasetLLMAugmented:
             files = files[:max_files]
         print(f"Found {len(files)} LLM-labelled files.")
         print(f"Hidden mode: {hidden_mode}")
+        print(
+            f"Hidden skip: {hidden_skip_n} "
+            f"(reset_on_done={hidden_skip_reset_on_done})"
+        )
 
         if len(files) == 0:
             raise ValueError(f"No files found at {search_path}")
@@ -373,6 +455,9 @@ class OfflineDatasetLLMAugmented:
         )
         self.return_to_go = np.zeros((total_samples,), dtype=np.float32)
         self.hidden_mode = hidden_mode
+        self.hidden_skip_n = int(hidden_skip_n)
+        self.hidden_skip_reset_on_done = bool(hidden_skip_reset_on_done)
+        self._dataset_files = [f for f, _ in file_info]
 
         def load_single_file(args):
             fpath, expected_n = args
@@ -505,6 +590,27 @@ class OfflineDatasetLLMAugmented:
                 self.hidden_state = self.hidden_state[: self.size]
             self.return_to_go = self.return_to_go[: self.size]
 
+        self.hidden_refresh_count = None
+        if self.hidden_state is not None:
+            self.hidden_state, self.hidden_refresh_count = apply_hidden_skip_schedule(
+                hidden_state=self.hidden_state,
+                done=self.done,
+                num_envs=num_envs,
+                skip_n=self.hidden_skip_n,
+                reset_on_done=self.hidden_skip_reset_on_done,
+            )
+            total_positions = int(self.hidden_state.shape[0])
+            refresh_ratio = (
+                float(self.hidden_refresh_count) / float(total_positions)
+                if total_positions > 0
+                else 0.0
+            )
+            print(
+                "Applied hidden skip schedule: "
+                f"refreshes={self.hidden_refresh_count}/{total_positions} "
+                f"({refresh_ratio:.4f}), skip_n={self.hidden_skip_n}"
+            )
+
         # Compute normalization statistics for hidden-state inputs.
         if self.hidden_state is not None:
             self.hidden_mean = np.mean(self.hidden_state, axis=0)
@@ -524,6 +630,25 @@ class OfflineDatasetLLMAugmented:
         stats_path = os.path.join(Config.SAVE_DIR, "hidden_state_stats.npz")
         np.savez(stats_path, mean=self.hidden_mean, std=self.hidden_std)
         print(f"Saved normalization statistics to {stats_path}")
+
+    def metadata(self) -> dict:
+        file_hash = hashlib.sha1(
+            "\n".join(self._dataset_files).encode("utf-8")
+        ).hexdigest()
+        md = {
+            "num_samples": int(self.size),
+            "num_files": int(len(self._dataset_files)),
+            "dataset_files_sha1": file_hash,
+            "hidden_mode": self.hidden_mode,
+            "hidden_skip_n": int(self.hidden_skip_n),
+            "hidden_skip_reset_on_done": bool(self.hidden_skip_reset_on_done),
+        }
+        if self.hidden_refresh_count is not None:
+            md["hidden_refresh_count"] = int(self.hidden_refresh_count)
+            md["hidden_refresh_fraction"] = float(
+                self.hidden_refresh_count / max(1, self.size)
+            )
+        return md
 
     def sample(self, batch_size):
         idx = np.random.randint(0, self.size, size=batch_size)
@@ -673,6 +798,18 @@ def parse_args():
         help="How hidden states are fed during training.",
     )
     parser.add_argument(
+        "--hidden_skip_n",
+        type=int,
+        default=1,
+        help="Hold hidden vectors for N timesteps before refreshing (1 disables hold).",
+    )
+    parser.add_argument(
+        "--hidden_skip_reset_on_done",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="When true, refresh hidden on first step after episode termination.",
+    )
+    parser.add_argument(
         "--fusion_mode",
         type=str,
         default=Config.FUSION_MODE,
@@ -733,6 +870,8 @@ def parse_args():
 # ==============================================================================
 def main():
     args = parse_args()
+    if args.hidden_skip_n < 1:
+        raise ValueError(f"--hidden_skip_n must be >= 1, got {args.hidden_skip_n}")
 
     # Update config
     Config.DATA_DIR = args.data_dir
@@ -807,6 +946,8 @@ def main():
         compute_missing_returns=args.compute_missing_returns,
         max_workers=args.dataset_workers,
         hidden_mode=args.hidden_mode,
+        hidden_skip_n=args.hidden_skip_n,
+        hidden_skip_reset_on_done=args.hidden_skip_reset_on_done,
         max_dataset_gb=args.max_dataset_gb,
         auto_file_limit=not args.disable_auto_file_limit,
         min_rtg_quantile=args.min_rtg_quantile,
@@ -829,6 +970,25 @@ def main():
     print("Creating optimizer...")
     optimizer = optim.Adam(model.parameters(), lr=Config.LR)
     print("Optimizer created!")
+
+    train_meta = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "argv": vars(args),
+        "config": {
+            k: v for k, v in vars(Config).items() if not k.startswith("_")
+        },
+        "dataset": dataset.metadata(),
+    }
+    meta_path = os.path.join(Config.SAVE_DIR, "training_metadata.json")
+    def _json_default(o):
+        if isinstance(o, np.generic):
+            return o.item()
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(train_meta, f, indent=2, sort_keys=True, default=_json_default)
+    print(f"Wrote training metadata to {meta_path}")
 
     model.train()
 

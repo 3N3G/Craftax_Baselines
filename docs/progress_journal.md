@@ -665,3 +665,83 @@ Evaluate value function on curated observation states to understand what the LLM
 ### Local analysis artifact added
 - `analysis/value_probe_pairs_seed42_smoke/`:
   - generated smoke-test probe states/vectors and summaries used to validate pair-analysis workflow.
+
+## 2026-02-24: Policy Wave v2.1 Implementation (Queue-Aware Eval Stack)
+
+### Completed code changes
+- Offline AWR hidden-skip support:
+  - `offline_rl/awr_llm_augmented.py`
+    - new args: `--hidden_skip_n`, `--hidden_skip_reset_on_done`
+    - hidden-refresh scheduling applied to dataset hidden states
+    - run metadata persisted to `training_metadata.json`
+  - `scripts/sbatch/run_offline_awr_llm_augmented.sbatch`
+    - env passthrough: `HIDDEN_SKIP_N`, `HIDDEN_SKIP_RESET_ON_DONE`
+  - `scripts/sbatch/launch_offline_awr_skip_grid.sh`
+    - 3x3 `fusion x skip` launcher with queue/completion skip logic
+    - optional `JOB_IDS_OUT` for dependency chaining
+
+- PPO symbolic checkpoint slicing:
+  - `online_rl/ppo.py`
+    - new args: `--policy_save_dir`, `--save_policy_every_steps`, `--save_policy_final`
+    - periodic msgpack checkpoint saves during training + final checkpoint save
+    - sidecar metadata json and `latest_policy.json`
+  - `scripts/sbatch/run_ppo_symbolic_policy.sbatch`
+    - dedicated PPO symbolic launcher with periodic/final policy artifacts
+
+- Recorder full bundle schema:
+  - `play_craftax_recorder.py`
+  - `tools/play_craftax_recorder.py`
+    - per-step bundles now include:
+      - pre/post serialized EnvState
+      - pre/post symbolic obs arrays
+      - pre/post raw+filtered text
+      - metadata/version/env digest/git commit
+
+- Unified policy-wave evaluator + manifest:
+  - `scripts/eval_policy_wave.py`
+    - tracks: `id`, `value`, `ood`, `gameplay_llm`, `bundle`
+    - loaders: torch offline AWR, jax augmented msgpack, PPO msgpack, PPO orbax
+    - skip-aligned hidden refresh + optional generation during gameplay evals
+    - OOD scenario library (including mob/floor scenarios and diagnostic impossible-state track)
+    - value battery orchestration over:
+      - `offline_rl/analyze_value_learning.py`
+      - `offline_rl/analyze_value_pairs.py`
+      - `offline_rl/analyze_value_td_consistency.py`
+  - `configs/eval/policy_wave_v2.yaml`
+    - policy set registration (offline 9-grid + online skip25/skip5 + PPO baseline)
+    - checkpoint slice globs and OOD scenario definitions
+
+- Value probe extensions:
+  - `offline_rl/analyze_value_pairs.py`
+    - added floor/mob probe pairs:
+      - `floor1_to_floor2`, `floor1_to_floor3`
+      - `floor1_zombie_adjacent`, `floor1_skeleton_adjacent`
+      - `floor2_orc_adjacent`, `floor2_witch_adjacent`
+      - `impossible_floor1_witch_adjacent` (diagnostic)
+    - supports obs-level pair construction in addition to state-level scalar/inventory probes
+  - `offline_rl/generate_value_probe_pairs.py`
+    - supports generating both state-level and obs-level probe artifacts
+
+- TD consistency analyzer:
+  - `offline_rl/analyze_value_td_consistency.py`
+    - computes one-step Bellman consistency metrics on sampled transitions
+    - supports torch `.pth` and jax `.msgpack` checkpoints
+
+- Babel rl orchestration wrappers:
+  - `scripts/sbatch/run_eval_policy_wave.sbatch`
+  - `scripts/sbatch/run_eval_policy_wave_id.sbatch`
+  - `scripts/sbatch/run_eval_policy_wave_value.sbatch`
+  - `scripts/sbatch/run_eval_policy_wave_ood.sbatch`
+  - `scripts/sbatch/run_eval_policy_wave_gameplay_llm.sbatch`
+  - `scripts/sbatch/run_policy_wave_report.sbatch`
+  - `scripts/sbatch/launch_policy_wave_v2.sh`
+    - queue-aware launcher:
+      - online runs monitored (not resubmitted)
+      - optional PPO/offline submissions
+      - eval tracks chained via `afterok` dependencies
+  - `scripts/sbatch/launch_resume_skip5.sh`
+    - helper to continue skip5 from resumable checkpoint
+
+- Consolidated markdown reporting:
+  - `analysis/reports/generate_policy_wave_v2_report.py`
+    - builds `analysis/reports/policy_wave_v2_report.md` from wave summary json

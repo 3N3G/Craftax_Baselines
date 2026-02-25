@@ -13,6 +13,24 @@ from craftax.craftax.constants import Action
 from craftax.craftax_env import make_craftax_env_from_name
 
 try:
+    from labelling.obs_to_text import (
+        MAP_OBS_SIZE,
+        MAP_CHANNELS,
+        NUM_BLOCK_TYPES,
+        NUM_ITEM_TYPES,
+        NUM_MOB_TYPES,
+        OBS_DIM,
+    )
+except ModuleNotFoundError:
+    # Keep standalone execution resilient if repo root is not on PYTHONPATH.
+    MAP_OBS_SIZE = 8217
+    MAP_CHANNELS = 83
+    NUM_BLOCK_TYPES = 37
+    NUM_ITEM_TYPES = 5
+    NUM_MOB_TYPES = 8
+    OBS_DIM = (9, 11)
+
+try:
     from offline_rl.awr_llm_augmented import ActorCriticAug
 except ModuleNotFoundError:
     # Support direct script execution without repo root on PYTHONPATH.
@@ -25,11 +43,52 @@ HIDDEN_STATE_DIM = 2560
 DEFAULT_HIGH_STAT = 9.0
 DEFAULT_LOW_STAT = 1.0
 
+# Inventory special values start index in inventory block:
+# 16 inv + 6 potions + 9 intrinsics + 4 dir + 4 armour + 4 ench = 43
+SPECIAL_START = 43
+SPECIAL_FLOOR_INDEX = SPECIAL_START + 5
+
+MOB_CHANNEL_START = NUM_BLOCK_TYPES + NUM_ITEM_TYPES
+MOB_CHANNELS = 5 * NUM_MOB_TYPES
+LIGHT_CHANNEL = MAP_CHANNELS - 1
+
 
 @dataclass
 class PairSpec:
     name: str
-    expected_sign: int  # +1 means "high should be higher value", -1 opposite
+    # +1 means high should be higher value, -1 means high should be lower,
+    # 0 means diagnostic-only (no directional expectation).
+    expected_sign: int
+
+
+PAIR_EXPECTED_SIGN: Dict[str, int] = {
+    "health": 1,
+    "food": 1,
+    "drink": 1,
+    "energy": 1,
+    "wood": 1,
+    "stone": 1,
+    # Floor transitions are harder/deeper, so we expect lower values.
+    "floor1_to_floor2": -1,
+    "floor1_to_floor3": -1,
+    # Mob-threat pairs: high = threat present near player.
+    "floor1_zombie_adjacent": -1,
+    "floor1_skeleton_adjacent": -1,
+    "floor2_orc_adjacent": -1,
+    "floor2_witch_adjacent": -1,
+    # Keep impossible-state diagnostic available without directional scoring.
+    "impossible_floor1_witch_adjacent": 0,
+}
+
+OBS_LEVEL_PAIRS = {
+    "floor1_to_floor2",
+    "floor1_to_floor3",
+    "floor1_zombie_adjacent",
+    "floor1_skeleton_adjacent",
+    "floor2_orc_adjacent",
+    "floor2_witch_adjacent",
+    "impossible_floor1_witch_adjacent",
+}
 
 
 def load_hidden_stats(checkpoint_path: Path) -> Optional[Tuple[np.ndarray, np.ndarray, Path]]:
@@ -59,13 +118,11 @@ def _replace_scalar(state, field_name: str, value: float):
 def _replace_inventory_scalar(state, field_name: str, value: float):
     inv = state.inventory
     inv_field_value = getattr(inv, field_name)
-    new_inv = inv.replace(
-        **{field_name: jnp.asarray(value, dtype=inv_field_value.dtype)}
-    )
+    new_inv = inv.replace(**{field_name: jnp.asarray(value, dtype=inv_field_value.dtype)})
     return state.replace(inventory=new_inv)
 
 
-def apply_pair(state, pair_name: str) -> Tuple[object, object]:
+def apply_state_pair(state, pair_name: str) -> Tuple[object, object]:
     if pair_name == "health":
         low = _replace_scalar(state, "player_health", DEFAULT_LOW_STAT)
         high = _replace_scalar(state, "player_health", DEFAULT_HIGH_STAT)
@@ -85,9 +142,71 @@ def apply_pair(state, pair_name: str) -> Tuple[object, object]:
         low = _replace_inventory_scalar(state, "stone", 0)
         high = _replace_inventory_scalar(state, "stone", 10)
     else:
-        raise ValueError(f"Unsupported pair type: {pair_name}")
-
+        raise ValueError(f"Unsupported state-level pair type: {pair_name}")
     return low, high
+
+
+def _set_floor(obs_flat: np.ndarray, floor_value: int) -> np.ndarray:
+    obs = np.asarray(obs_flat, dtype=np.float32).copy()
+    obs[MAP_OBS_SIZE + SPECIAL_FLOOR_INDEX] = float(floor_value) / 10.0
+    return obs
+
+
+def _inject_mob(
+    obs_flat: np.ndarray,
+    mob_class: int,
+    mob_type: int,
+    row_offset: int = 1,
+    col_offset: int = 0,
+    floor_value: Optional[int] = None,
+) -> np.ndarray:
+    obs = np.asarray(obs_flat, dtype=np.float32).copy()
+    if floor_value is not None:
+        obs[MAP_OBS_SIZE + SPECIAL_FLOOR_INDEX] = float(floor_value) / 10.0
+
+    map_view = obs[:MAP_OBS_SIZE].reshape(OBS_DIM[0], OBS_DIM[1], MAP_CHANNELS)
+    row = int(np.clip(OBS_DIM[0] // 2 + row_offset, 0, OBS_DIM[0] - 1))
+    col = int(np.clip(OBS_DIM[1] // 2 + col_offset, 0, OBS_DIM[1] - 1))
+
+    mob_idx = mob_class * NUM_MOB_TYPES + mob_type
+    if mob_idx < 0 or mob_idx >= MOB_CHANNELS:
+        raise ValueError(f"Invalid mob index: class={mob_class} type={mob_type}")
+
+    map_view[row, col, MOB_CHANNEL_START : MOB_CHANNEL_START + MOB_CHANNELS] = 0.0
+    map_view[row, col, MOB_CHANNEL_START + mob_idx] = 1.0
+    # Ensure the target tile is visible.
+    map_view[row, col, LIGHT_CHANNEL] = 1.0
+    return obs
+
+
+def apply_obs_pair(base_obs: np.ndarray, pair_name: str) -> Tuple[np.ndarray, np.ndarray]:
+    if pair_name == "floor1_to_floor2":
+        low = _set_floor(base_obs, 1)
+        high = _set_floor(base_obs, 2)
+    elif pair_name == "floor1_to_floor3":
+        low = _set_floor(base_obs, 1)
+        high = _set_floor(base_obs, 3)
+    elif pair_name == "floor1_zombie_adjacent":
+        low = _set_floor(base_obs, 1)
+        high = _inject_mob(low, mob_class=0, mob_type=0, row_offset=1, col_offset=0, floor_value=1)
+    elif pair_name == "floor1_skeleton_adjacent":
+        # Craftax class-2/type-0 is floor-1 ranged threat; we treat this as skeleton-like.
+        low = _set_floor(base_obs, 1)
+        high = _inject_mob(low, mob_class=2, mob_type=0, row_offset=1, col_offset=0, floor_value=1)
+    elif pair_name == "floor2_orc_adjacent":
+        low = _set_floor(base_obs, 2)
+        high = _inject_mob(low, mob_class=0, mob_type=2, row_offset=1, col_offset=0, floor_value=2)
+    elif pair_name == "floor2_witch_adjacent":
+        # Witch-like proxy: fire mage channel (class-2/type-6) on floor 2.
+        low = _set_floor(base_obs, 2)
+        high = _inject_mob(low, mob_class=2, mob_type=6, row_offset=1, col_offset=0, floor_value=2)
+    elif pair_name == "impossible_floor1_witch_adjacent":
+        low = _set_floor(base_obs, 1)
+        high = _inject_mob(low, mob_class=2, mob_type=6, row_offset=1, col_offset=0, floor_value=1)
+    else:
+        raise ValueError(f"Unsupported obs-level pair type: {pair_name}")
+
+    return low.astype(np.float32, copy=False), high.astype(np.float32, copy=False)
 
 
 def collect_states(env, env_params, num_states: int, seed: int, max_steps: int) -> List[object]:
@@ -96,7 +215,7 @@ def collect_states(env, env_params, num_states: int, seed: int, max_steps: int) 
     _, state = env.reset(reset_rng, env_params)
 
     rollout_states: List[object] = []
-    for step in range(max_steps):
+    for _ in range(max_steps):
         rollout_states.append(state)
         rng, step_rng = jax.random.split(rng)
         action = int(np.random.randint(0, ACTION_DIM))
@@ -118,18 +237,31 @@ def build_hidden_input(mode: str, hidden_dim: int, seed: int) -> np.ndarray:
     raise ValueError(f"Unsupported hidden_input_mode: {mode}")
 
 
-def build_pair_state_cache(
-    states: List[object], pair_specs: List[PairSpec]
-) -> Dict[str, List[Tuple[object, object]]]:
-    cache: Dict[str, List[Tuple[object, object]]] = {}
+def build_pair_obs_cache(
+    states: List[object],
+    pair_specs: List[PairSpec],
+    env,
+) -> Dict[str, List[Tuple[np.ndarray, np.ndarray]]]:
+    base_obs = [np.asarray(env.get_obs(s), dtype=np.float32).reshape(-1) for s in states]
+    cache: Dict[str, List[Tuple[np.ndarray, np.ndarray]]] = {}
+
     for spec in pair_specs:
-        cache[spec.name] = [apply_pair(state, spec.name) for state in states]
+        pair_rows: List[Tuple[np.ndarray, np.ndarray]] = []
+        if spec.name in OBS_LEVEL_PAIRS:
+            for obs in base_obs:
+                pair_rows.append(apply_obs_pair(obs, spec.name))
+        else:
+            for state in states:
+                low_state, high_state = apply_state_pair(state, spec.name)
+                low_obs = np.asarray(env.get_obs(low_state), dtype=np.float32).reshape(-1)
+                high_obs = np.asarray(env.get_obs(high_state), dtype=np.float32).reshape(-1)
+                pair_rows.append((low_obs, high_obs))
+        cache[spec.name] = pair_rows
     return cache
 
 
 def build_llm_hidden_lookup(
-    env,
-    pair_state_cache: Dict[str, List[Tuple[object, object]]],
+    pair_obs_cache: Dict[str, List[Tuple[np.ndarray, np.ndarray]]],
     llm_model_id: str,
     llm_batch_size: int,
 ) -> Tuple[Dict[Tuple[str, int, str], np.ndarray], Dict[str, float]]:
@@ -140,11 +272,8 @@ def build_llm_hidden_lookup(
     keys: List[Tuple[str, int, str]] = []
     texts: List[str] = []
 
-    for pair_name, state_pairs in pair_state_cache.items():
-        for state_idx, (low_state, high_state) in enumerate(state_pairs):
-            low_obs = np.asarray(env.get_obs(low_state), dtype=np.float32).reshape(-1)
-            high_obs = np.asarray(env.get_obs(high_state), dtype=np.float32).reshape(-1)
-
+    for pair_name, obs_pairs in pair_obs_cache.items():
+        for state_idx, (low_obs, high_obs) in enumerate(obs_pairs):
             low_text = filter_text_obs(obs_to_text(low_obs))
             high_text = filter_text_obs(obs_to_text(high_obs))
 
@@ -158,9 +287,7 @@ def build_llm_hidden_lookup(
         f"(model={llm_model_id}, batch_size={llm_batch_size})"
     )
     extractor = LLMHiddenStateExtractor(model_id=llm_model_id, tokens_generated=1)
-    hidden_states, metrics = extractor.extract_hidden_states_no_cot(
-        texts, batch_size=llm_batch_size
-    )
+    hidden_states, metrics = extractor.extract_hidden_states_no_cot(texts, batch_size=llm_batch_size)
 
     lookup: Dict[Tuple[str, int, str], np.ndarray] = {}
     for i, key in enumerate(keys):
@@ -168,31 +295,49 @@ def build_llm_hidden_lookup(
     return lookup, metrics
 
 
-def value_for_state(model, env, state, hidden_vec: np.ndarray, device: torch.device) -> float:
-    obs = np.asarray(env.get_obs(state), dtype=np.float32).copy()
-    obs_t = torch.from_numpy(obs).unsqueeze(0).to(device)
-    hidden_t = torch.from_numpy(hidden_vec).unsqueeze(0).to(device)
+def value_for_obs(model, obs: np.ndarray, hidden_vec: np.ndarray, device: torch.device) -> float:
+    obs_t = torch.from_numpy(np.asarray(obs, dtype=np.float32)).unsqueeze(0).to(device)
+    hidden_t = torch.from_numpy(np.asarray(hidden_vec, dtype=np.float32)).unsqueeze(0).to(device)
     with torch.no_grad():
         _, value = model(obs_t, hidden_t)
     return float(value.item())
 
 
+def infer_fusion_mode(state_dict: Dict[str, torch.Tensor], hidden_dim: int) -> str:
+    actor_in = int(state_dict["actor_fc1.weight"].shape[1])
+    layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
+    if actor_in == layer_width + hidden_dim:
+        return "concat_raw"
+    if actor_in == 2 * layer_width:
+        return "gated_proj"
+    if actor_in == layer_width:
+        return "residual_gated"
+    # Backward-compatible fallback if shapes are unexpected.
+    if (
+        "hidden_gate_logit" in state_dict
+        or "hidden_proj.weight" in state_dict
+        or "hidden_ln.weight" in state_dict
+    ):
+        return "gated_proj"
+    return "concat_raw"
+
+
 def load_model(checkpoint_path: Path, obs_dim: int, device: torch.device) -> ActorCriticAug:
     state_dict = torch.load(checkpoint_path, map_location=device)
-    fusion_mode = (
-        "gated_proj"
-        if (
-            "hidden_gate_logit" in state_dict
-            or "hidden_proj.weight" in state_dict
-            or "hidden_ln.weight" in state_dict
-        )
-        else "concat_raw"
-    )
+    if "hidden_proj.weight" in state_dict:
+        hidden_dim = int(state_dict["hidden_proj.weight"].shape[-1])
+    else:
+        actor_in = int(state_dict["actor_fc1.weight"].shape[1])
+        layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
+        hidden_dim = actor_in - layer_width
+        if hidden_dim <= 0:
+            hidden_dim = HIDDEN_STATE_DIM
+    fusion_mode = infer_fusion_mode(state_dict, hidden_dim=hidden_dim)
     model = ActorCriticAug(
         obs_dim=obs_dim,
         action_dim=ACTION_DIM,
         layer_width=LAYER_WIDTH,
-        hidden_state_dim=HIDDEN_STATE_DIM,
+        hidden_state_dim=hidden_dim,
         fusion_mode=fusion_mode,
     ).to(device)
     model.load_state_dict(state_dict, strict=True)
@@ -202,8 +347,7 @@ def load_model(checkpoint_path: Path, obs_dim: int, device: torch.device) -> Act
 
 def analyze_checkpoint(
     checkpoint_path: Path,
-    pair_state_cache: Dict[str, List[Tuple[object, object]]],
-    env,
+    pair_obs_cache: Dict[str, List[Tuple[np.ndarray, np.ndarray]]],
     pair_specs: List[PairSpec],
     hidden_input_mode: str,
     device: torch.device,
@@ -211,8 +355,8 @@ def analyze_checkpoint(
     llm_hidden_lookup: Optional[Dict[Tuple[str, int, str], np.ndarray]] = None,
     normalize_llm_hidden: bool = True,
 ) -> Dict[str, object]:
-    first_pair = pair_state_cache[pair_specs[0].name][0][0]
-    obs_dim = int(np.asarray(env.get_obs(first_pair)).reshape(-1).shape[0])
+    first_pair = pair_obs_cache[pair_specs[0].name][0][0]
+    obs_dim = int(np.asarray(first_pair).reshape(-1).shape[0])
     model = load_model(checkpoint_path, obs_dim, device)
 
     hidden_stats_info = None
@@ -240,13 +384,13 @@ def analyze_checkpoint(
     results = {}
     for spec in pair_specs:
         deltas = []
-        state_pairs = pair_state_cache[spec.name]
-        for state_idx, (low_state, high_state) in enumerate(state_pairs):
+        obs_pairs = pair_obs_cache[spec.name]
+        for pair_idx, (low_obs, high_obs) in enumerate(obs_pairs):
             if hidden_input_mode == "llm_no_cot":
                 if llm_hidden_lookup is None:
                     raise ValueError("llm_hidden_lookup is required for llm_no_cot mode")
-                hidden_low = llm_hidden_lookup[(spec.name, state_idx, "low")]
-                hidden_high = llm_hidden_lookup[(spec.name, state_idx, "high")]
+                hidden_low = llm_hidden_lookup[(spec.name, pair_idx, "low")]
+                hidden_high = llm_hidden_lookup[(spec.name, pair_idx, "high")]
                 if hidden_mean is not None and hidden_std is not None:
                     hidden_low = normalize_hidden(hidden_low, hidden_mean, hidden_std)
                     hidden_high = normalize_hidden(hidden_high, hidden_mean, hidden_std)
@@ -256,18 +400,28 @@ def analyze_checkpoint(
                 hidden_low = shared_hidden_vec
                 hidden_high = shared_hidden_vec
 
-            v_low = value_for_state(model, env, low_state, hidden_low, device)
-            v_high = value_for_state(model, env, high_state, hidden_high, device)
+            v_low = value_for_obs(model, low_obs, hidden_low, device)
+            v_high = value_for_obs(model, high_obs, hidden_high, device)
             deltas.append(v_high - v_low)
 
         deltas_np = np.asarray(deltas, dtype=np.float32)
-        sign_correct = float(np.mean((deltas_np * spec.expected_sign) > 0.0))
-        results[spec.name] = {
+        pair_metrics = {
             "mean_delta_high_minus_low": float(np.mean(deltas_np)),
             "median_delta_high_minus_low": float(np.median(deltas_np)),
-            "sign_correct_fraction": sign_correct,
+            "p10_delta": float(np.percentile(deltas_np, 10)),
+            "p90_delta": float(np.percentile(deltas_np, 90)),
+            "fraction_positive": float(np.mean(deltas_np > 0.0)),
+            "fraction_negative": float(np.mean(deltas_np < 0.0)),
             "num_pairs": int(len(deltas_np)),
+            "expected_sign": int(spec.expected_sign),
         }
+        if spec.expected_sign != 0:
+            pair_metrics["sign_correct_fraction"] = float(
+                np.mean((deltas_np * spec.expected_sign) > 0.0)
+            )
+        else:
+            pair_metrics["sign_correct_fraction"] = None
+        results[spec.name] = pair_metrics
 
     return {
         "checkpoint": str(checkpoint_path),
@@ -279,7 +433,7 @@ def analyze_checkpoint(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate value function monotonicity on controlled Craftax state pairs."
+        description="Evaluate value-function monotonicity on controlled Craftax probe pairs."
     )
     parser.add_argument(
         "--checkpoints",
@@ -292,8 +446,18 @@ def parse_args():
         "--pairs",
         type=str,
         nargs="+",
-        default=["health", "food", "drink", "energy", "wood", "stone"],
-        choices=["health", "food", "drink", "energy", "wood", "stone"],
+        default=[
+            "health",
+            "food",
+            "drink",
+            "energy",
+            "wood",
+            "stone",
+            "floor1_zombie_adjacent",
+            "floor1_skeleton_adjacent",
+            "floor2_witch_adjacent",
+        ],
+        choices=sorted(PAIR_EXPECTED_SIGN.keys()),
     )
     parser.add_argument("--num_states", type=int, default=128)
     parser.add_argument("--max_steps", type=int, default=5000)
@@ -354,21 +518,18 @@ def main():
     else:
         print(f"Collected {len(states)} base states.")
 
-    pair_specs = [PairSpec(name=p, expected_sign=1) for p in args.pairs]
-    pair_state_cache = build_pair_state_cache(states, pair_specs)
+    pair_specs = [PairSpec(name=p, expected_sign=PAIR_EXPECTED_SIGN[p]) for p in args.pairs]
+    pair_obs_cache = build_pair_obs_cache(states=states, pair_specs=pair_specs, env=env)
 
     shared_hidden_vec: Optional[np.ndarray] = None
     llm_hidden_lookup: Optional[Dict[Tuple[str, int, str], np.ndarray]] = None
     llm_metrics: Optional[Dict[str, float]] = None
 
     if args.hidden_input_mode in {"zero", "random"}:
-        shared_hidden_vec = build_hidden_input(
-            args.hidden_input_mode, HIDDEN_STATE_DIM, args.seed
-        )
+        shared_hidden_vec = build_hidden_input(args.hidden_input_mode, HIDDEN_STATE_DIM, args.seed)
     else:
         llm_hidden_lookup, llm_metrics = build_llm_hidden_lookup(
-            env=env,
-            pair_state_cache=pair_state_cache,
+            pair_obs_cache=pair_obs_cache,
             llm_model_id=args.llm_model_id,
             llm_batch_size=args.llm_batch_size,
         )
@@ -380,8 +541,7 @@ def main():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         result = analyze_checkpoint(
             checkpoint_path=ckpt_path,
-            pair_state_cache=pair_state_cache,
-            env=env,
+            pair_obs_cache=pair_obs_cache,
             pair_specs=pair_specs,
             hidden_input_mode=args.hidden_input_mode,
             device=device,

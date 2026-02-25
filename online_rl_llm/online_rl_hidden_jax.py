@@ -374,7 +374,7 @@ def render_craftax_text_swapped(state):
 class LLMHiddenStateManager:
     def __init__(self, model_id: str = Config.MODEL_ID, target_layer: int = -1, tokens_to_generate: int = 1):
         self.tokens_to_generate = tokens_to_generate
-        vllm_url = "http://localhost:8000"
+        vllm_url = os.environ.get("VLLM_URL", "http://localhost:8000").rstrip("/")
         try:
             resp = requests.get(f"{vllm_url}/health", timeout=2)
             if resp.status_code != 200:

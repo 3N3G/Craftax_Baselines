@@ -10,7 +10,7 @@
 
 # Online RL with vLLM Hidden States - JAX implementation.
 
-set -eo pipefail
+set -Eeo pipefail
 
 # Source bashrc defensively because some profile scripts can return non-zero.
 set +e
@@ -30,6 +30,17 @@ cd ~/Craftax_Baselines
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 export GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+# Mirror runtime logs to a non-repo path so accidental repo sync/delete
+# cannot erase the only diagnostics for a failed run.
+RUNTIME_LOG_ROOT="${RUNTIME_LOG_ROOT:-/data/user_data/${USER}/craftax_job_logs}"
+mkdir -p "${RUNTIME_LOG_ROOT}" >/dev/null 2>&1 || true
+RUNTIME_STDOUT="${RUNTIME_LOG_ROOT}/online_rl_hidden_jax_${SLURM_JOB_ID}.runtime.out"
+RUNTIME_STDERR="${RUNTIME_LOG_ROOT}/online_rl_hidden_jax_${SLURM_JOB_ID}.runtime.err"
+exec > >(tee -a "${RUNTIME_STDOUT}")
+exec 2> >(tee -a "${RUNTIME_STDERR}" >&2)
+echo "Runtime log mirror: ${RUNTIME_STDOUT}"
+echo "Runtime error mirror: ${RUNTIME_STDERR}"
 
 if ! command -v conda >/dev/null 2>&1; then
     echo "ERROR: conda not found after sourcing bashrc"
@@ -72,6 +83,8 @@ ACTOR_HEAD_LAYERS=${ACTOR_HEAD_LAYERS:-1}
 CRITIC_HEAD_LAYERS=${CRITIC_HEAD_LAYERS:-2}
 NO_LLM=${NO_LLM:-0}
 RUN_NAME=${RUN_NAME:-}
+VLLM_PORT_BASE=${VLLM_PORT_BASE:-18000}
+VLLM_EXPECTED_MODEL=${VLLM_EXPECTED_MODEL:-./configs/vllm_hidden_qwen4b}
 
 echo "========================================"
 echo "Online RL with vLLM Hidden States (JAX)"
@@ -111,14 +124,50 @@ cleanup() {
 }
 trap cleanup EXIT
 
+on_error() {
+    local rc=$?
+    echo "FATAL: run_online_rl_hidden_jax.sbatch failed (exit=${rc}) at line ${BASH_LINENO[0]} while running: ${BASH_COMMAND}"
+    if [[ -n "${VLLM_PID}" ]] && [[ -f "logs/vllm_server_jax_${SLURM_JOB_ID}.log" ]]; then
+        echo "Last 80 lines of vLLM server log:"
+        tail -80 "logs/vllm_server_jax_${SLURM_JOB_ID}.log" || true
+    fi
+    exit "${rc}"
+}
+trap on_error ERR
+
+find_open_port() {
+    local port="$1"
+    local tries=0
+    while [[ $tries -lt 512 ]]; do
+        if ! ss -ltn "( sport = :${port} )" 2>/dev/null | grep -q ":${port}"; then
+            echo "${port}"
+            return 0
+        fi
+        port=$((port + 1))
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
 if [[ "${NO_LLM}" != "1" ]]; then
+    JOB_SUFFIX=$((SLURM_JOB_ID % 1000))
+    DESIRED_PORT=$((VLLM_PORT_BASE + JOB_SUFFIX))
+    VLLM_PORT="$(find_open_port "${DESIRED_PORT}")"
+    if [[ -z "${VLLM_PORT}" ]]; then
+        echo "❌ ERROR: failed to find a free vLLM port near ${DESIRED_PORT}"
+        exit 1
+    fi
+    export VLLM_PORT
+    export VLLM_URL="http://127.0.0.1:${VLLM_PORT}"
+    echo "Using VLLM_URL=${VLLM_URL}"
+
     # Start vLLM server in background
     echo "Starting vLLM server..."
     activate_conda_for "vllm-server" \
         /data/user_data/geney/.conda/envs/craftax_fast_llm \
         craftax_fast_llm \
         base
-    bash scripts/start_vllm_hidden.sh --mode last_token > logs/vllm_server_jax_${SLURM_JOB_ID}.log 2>&1 &
+    bash scripts/start_vllm_hidden.sh --mode last_token --port "${VLLM_PORT}" > logs/vllm_server_jax_${SLURM_JOB_ID}.log 2>&1 &
     VLLM_PID=$!
 
     # Wait for server to be ready (no timeout - will wait as long as needed)
@@ -126,7 +175,8 @@ if [[ "${NO_LLM}" != "1" ]]; then
     echo "The server needs to load all model shards before starting..."
     SECONDS=0
     while true; do
-        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        if curl -fsS "${VLLM_URL}/health" > /dev/null 2>&1 \
+           && curl -fsS "${VLLM_URL}/v1/models" | grep -q "${VLLM_EXPECTED_MODEL}"; then
             echo "✅ vLLM server ready after $SECONDS seconds!"
             break
         fi
@@ -190,7 +240,18 @@ fi
 if [[ -n "${RUN_NAME}" ]]; then
     PY_ARGS+=(--run-name "$RUN_NAME")
 fi
+set +e
 python -u online_rl_llm/online_rl_hidden_jax.py "${PY_ARGS[@]}"
+TRAIN_RC=$?
+set -e
+if [[ ${TRAIN_RC} -ne 0 ]]; then
+    echo "ERROR: training process exited with code ${TRAIN_RC}"
+    if [[ -f "logs/vllm_server_jax_${SLURM_JOB_ID}.log" ]]; then
+        echo "Last 120 lines of vLLM server log:"
+        tail -120 "logs/vllm_server_jax_${SLURM_JOB_ID}.log" || true
+    fi
+    exit "${TRAIN_RC}"
+fi
 
 echo ""
 echo "Done! Date: $(date)"

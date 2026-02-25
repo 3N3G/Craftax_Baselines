@@ -68,6 +68,8 @@ SAVE_FREQ="${SAVE_FREQ:-25000}"
 DATASET_WORKERS="${DATASET_WORKERS:-8}"
 NUM_ENVS="${NUM_ENVS:-128}"
 HIDDEN_MODE="${HIDDEN_MODE:-real}"
+HIDDEN_SKIP_N="${HIDDEN_SKIP_N:-1}"
+HIDDEN_SKIP_RESET_ON_DONE="${HIDDEN_SKIP_RESET_ON_DONE:-0}"
 FUSION_MODE="${FUSION_MODE:-residual_gated}"
 HIDDEN_GATE_INIT_LOGIT="${HIDDEN_GATE_INIT_LOGIT:--4.0}"
 ADVANTAGE_MODE="${ADVANTAGE_MODE:-center}"
@@ -91,6 +93,7 @@ CMD=(
     --num_envs "${NUM_ENVS}"
     --max_dataset_gb "${MAX_DATASET_GB}"
     --hidden_mode "${HIDDEN_MODE}"
+    --hidden_skip_n "${HIDDEN_SKIP_N}"
     --fusion_mode "${FUSION_MODE}"
     --hidden_gate_init_logit "${HIDDEN_GATE_INIT_LOGIT}"
     --advantage_mode "${ADVANTAGE_MODE}"
@@ -107,6 +110,10 @@ fi
 
 if [[ "${DISABLE_AUTO_FILE_LIMIT:-0}" == "1" ]]; then
     CMD+=(--disable_auto_file_limit)
+fi
+
+if [[ "${HIDDEN_SKIP_RESET_ON_DONE}" == "1" ]]; then
+    CMD+=(--hidden_skip_reset_on_done)
 fi
 
 if [[ "${NO_WANDB}" == "1" ]]; then
