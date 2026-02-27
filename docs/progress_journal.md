@@ -745,3 +745,22 @@ Evaluate value function on curated observation states to understand what the LLM
 - Consolidated markdown reporting:
   - `analysis/reports/generate_policy_wave_v2_report.py`
     - builds `analysis/reports/policy_wave_v2_report.md` from wave summary json
+
+## 2026-02-27: Unaugmented Offline Baseline & Diagnostics
+
+### What Changed
+- Added true unaugmented baseline for offline RL (`offline_rl/awr_unaugmented.py`):
+  - Uses `ActorCriticUnaugmented` (standard MLP obs->512->512->512->action/value) with no hidden states.
+  - Fixes a severe OOM bug where memory estimations used the default `OBS_DIM=1345` instead of the true value (`8268`), causing 80GB estimated runs to spike over 490GB.
+  - The fix scans the first file in the dataset to lock in the true `OBS_DIM` before allocating buffers.
+- Improved symbolic eval suite (`scripts/eval_symbolic_policy_suite.py`):
+  - Added support for `--adhoc-policy-name`, `--adhoc-policy-type`, and `--adhoc-policy-path` to allow one-off evaluation of checkpoints without registering them in the manifest.
+  - Added `torch_offline_unaugmented` policy type.
+  - Made `torch` imports lazy so the suite can run in JAX-only environments (like `craftax`).
+  - Increased `wandb.init` timeout to 300s to avoid cluster connection drops during startup.
+
+### Completed Validations
+- PPO baseline evaluation with video rollout (`6462933`) completed successfully: `mean_return=18.63`, `mean_ach=19.16`.
+- Unaugmented offline baseline (`6462652`) reached ~0.62 explained variance at 100k steps. 
+- Evaluated unaugmented baseline using adhoc flags (`6462934`): `mean_return=18.04`, `mean_ach=18.52`.
+  - *Key Takeaway*: The unaugmented offline RL stack is working exceptionally well, reaching near-parity with the online PPO baseline (18.04 vs 18.63) purely from offline data.
