@@ -3,7 +3,7 @@
 #SBATCH --partition=rl
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --time=1-00:00:00
 #SBATCH --output=logs/awr_unaugmented_%j.out
 #SBATCH --error=logs/awr_unaugmented_%j.err

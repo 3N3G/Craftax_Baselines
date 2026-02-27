@@ -60,7 +60,7 @@ class Config:
     SAVE_FREQ = 25000
     SAVE_DIR = "/data/group_data/rl/geney/checkpoints/awr_unaugmented/"
     SEED = 42
-    MAX_DATASET_GB = 80.0
+    MAX_DATASET_GB = 100.0
 
     # Wandb
     WANDB_PROJECT = "craftax-offline-awr"
@@ -231,12 +231,14 @@ class OfflineDatasetUnaugmented:
 
         self._all_file_info = list(file_info)
         self._all_dataset_files = [f for f, _ in self._all_file_info]
-        # No hidden states — bytes per sample is smaller
+        # Compute bytes per sample AFTER obs_dim is known from the first file.
+        # Config.OBS_DIM was updated above by the first-file scan.
         self._bytes_per_sample = (
-            4 * Config.OBS_DIM  # obs
-            + 3 * 4             # action, reward, done
-            + 4                 # return_to_go
+            4 * int(Config.OBS_DIM)  # obs (float32)
+            + 3 * 4                  # action(int32), reward(f32), done(f32)
+            + 4                      # return_to_go (float32)
         )
+        print(f"Bytes per sample: {self._bytes_per_sample} (obs_dim={Config.OBS_DIM})")
         estimated_gb = self._estimate_buffer_gb(total_samples)
         print(f"Estimated in-memory dataset footprint: {estimated_gb:.2f} GiB")
 
