@@ -63,7 +63,7 @@ except Exception:
 @dataclass
 class PolicySpec:
     name: str
-    policy_type: str  # "aug_msgpack" | "torch_offline_aug" | "ppo_orbax" | "ppo_msgpack"
+    policy_type: str  # "aug_msgpack" | "torch_offline_aug" | "torch_offline_unaugmented" | "ppo_orbax" | "ppo_msgpack"
     policy_path: str
     metadata_path: Optional[str]
     skip_n: int
@@ -433,6 +433,62 @@ def _load_ppo_msgpack_policy(checkpoint_path: str, obs_dim: int, action_dim: int
     }
 
 
+def _load_torch_offline_unaugmented_policy(checkpoint_path: str):
+    if torch is None:
+        raise ImportError("torch is required for torch_offline_unaugmented policy type")
+    from offline_rl.awr_unaugmented import ActorCriticUnaugmented
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    raw = torch.load(checkpoint_path, map_location=device)
+    if isinstance(raw, dict) and "model_state_dict" in raw:
+        state_dict = raw["model_state_dict"]
+    else:
+        state_dict = raw
+    if not isinstance(state_dict, dict):
+        raise ValueError(f"Unexpected checkpoint format for {checkpoint_path}")
+
+    # Infer dimensions from state_dict
+    obs_dim = int(state_dict["actor_fc1.weight"].shape[1])
+    layer_width = int(state_dict["actor_fc1.weight"].shape[0])
+    action_dim = int(state_dict["actor_out.weight"].shape[0])
+
+    model = ActorCriticUnaugmented(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        layer_width=layer_width,
+    ).to(device)
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+
+    def act_fn(params, obs, rng):
+        del params, rng
+        obs_np = np.asarray(jax.device_get(obs), dtype=np.float32)
+        with torch.no_grad():
+            obs_t = torch.from_numpy(obs_np).to(device=device, dtype=torch.float32)
+            pi, _ = model(obs_t)
+            actions = pi.sample().detach().cpu().numpy().astype(np.int32)
+        return jnp.asarray(actions, dtype=jnp.int32)
+
+    def value_fn(params, obs):
+        del params
+        obs_np = np.asarray(jax.device_get(obs), dtype=np.float32)
+        with torch.no_grad():
+            obs_t = torch.from_numpy(obs_np).to(device=device, dtype=torch.float32)
+            _, value = model(obs_t)
+            value_np = value.detach().cpu().numpy().astype(np.float32)
+        return jnp.asarray(value_np, dtype=jnp.float32)
+
+    return {
+        "params": None,
+        "act_fn": act_fn,
+        "value_fn": value_fn,
+        "uses_hidden": False,
+        "hidden_mean": None,
+        "hidden_std": None,
+        "framework": "torch",
+    }
+
+
 def _overlay_text(frame: np.ndarray, lines: List[str]) -> np.ndarray:
     if cv2 is None:
         return frame
@@ -665,6 +721,10 @@ def evaluate_policy(
             obs_dim=obs_dim,
             action_dim=action_dim,
             layer_width=args.layer_width,
+        )
+    elif spec.policy_type == "torch_offline_unaugmented":
+        policy = _load_torch_offline_unaugmented_policy(
+            checkpoint_path=spec.policy_path,
         )
     else:
         raise ValueError(f"Unsupported policy type: {spec.policy_type}")
@@ -966,6 +1026,8 @@ def policy_specs_from_manifest(manifest_path: str, manifest_policy_ids: str) -> 
             kind = "ppo_orbax"
         elif r.policy_type == "ppo_msgpack":
             kind = "ppo_msgpack"
+        elif r.policy_type == "torch_offline_unaugmented":
+            kind = "torch_offline_unaugmented"
         else:
             continue
 
