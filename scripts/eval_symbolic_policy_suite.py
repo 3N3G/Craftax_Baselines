@@ -59,7 +59,7 @@ except Exception:
 @dataclass
 class PolicySpec:
     name: str
-    policy_type: str  # "aug_msgpack" | "torch_offline_aug" | "ppo_orbax"
+    policy_type: str  # "aug_msgpack" | "torch_offline_aug" | "ppo_orbax" | "ppo_msgpack"
     policy_path: str
     metadata_path: Optional[str]
     skip_n: int
@@ -396,6 +396,34 @@ def _load_ppo_policy(run_dir: str, step: int, obs_dim: int, action_dim: int):
     }
 
 
+def _load_ppo_msgpack_policy(checkpoint_path: str, obs_dim: int, action_dim: int, layer_width: int = 512):
+    ckpt = Path(checkpoint_path)
+    blob = ckpt.read_bytes()
+
+    net = ActorCritic(action_dim=action_dim, layer_width=layer_width)
+    template = net.init(jax.random.PRNGKey(0), jnp.zeros((1, obs_dim), dtype=jnp.float32))
+    params = serialization.from_bytes(template, blob)
+
+    @jax.jit
+    def act_fn(params, obs, rng):
+        pi, _ = net.apply(params, obs)
+        return pi.sample(seed=rng)
+
+    @jax.jit
+    def value_fn(params, obs):
+        _, value = net.apply(params, obs)
+        return value
+
+    return {
+        "params": params,
+        "act_fn": act_fn,
+        "value_fn": value_fn,
+        "uses_hidden": False,
+        "hidden_mean": None,
+        "hidden_std": None,
+    }
+
+
 def _overlay_text(frame: np.ndarray, lines: List[str]) -> np.ndarray:
     if cv2 is None:
         return frame
@@ -621,6 +649,13 @@ def evaluate_policy(
             step=int(spec.train_step),
             obs_dim=obs_dim,
             action_dim=action_dim,
+        )
+    elif spec.policy_type == "ppo_msgpack":
+        policy = _load_ppo_msgpack_policy(
+            checkpoint_path=spec.policy_path,
+            obs_dim=obs_dim,
+            action_dim=action_dim,
+            layer_width=args.layer_width,
         )
     else:
         raise ValueError(f"Unsupported policy type: {spec.policy_type}")
@@ -920,6 +955,8 @@ def policy_specs_from_manifest(manifest_path: str, manifest_policy_ids: str) -> 
             kind = "torch_offline_aug"
         elif r.policy_type == "ppo_orbax":
             kind = "ppo_orbax"
+        elif r.policy_type == "ppo_msgpack":
+            kind = "ppo_msgpack"
         else:
             continue
 
@@ -1124,8 +1161,10 @@ def main():
                 stats_path=spec.stats_path,
                 llm_layer=spec.llm_layer,
             )
-        else:
+        elif spec.policy_type == "ppo_orbax":
             training_summary = _load_ppo_training_metadata(spec.policy_path, int(spec.train_step))
+        else:
+            training_summary = {"checkpoint": spec.policy_path}
 
         metrics, policy = evaluate_policy(
             spec=spec,
