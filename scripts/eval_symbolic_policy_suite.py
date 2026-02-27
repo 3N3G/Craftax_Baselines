@@ -1193,6 +1193,14 @@ def main():
     )
     parser.add_argument("--ppo-step", type=int, default=100000000)
     parser.add_argument("--no-video", action="store_true")
+
+    # Adhoc single policy evaluation
+    parser.add_argument("--adhoc-policy-name", type=str, default="")
+    parser.add_argument("--adhoc-policy-type", type=str, default="")
+    parser.add_argument("--adhoc-policy-path", type=str, default="")
+    parser.add_argument("--adhoc-policy-meta", type=str, default="")
+    parser.add_argument("--adhoc-policy-skip-n", type=int, default=0)
+
     args = parser.parse_args()
 
     os.makedirs(Path(args.output_json).parent, exist_ok=True)
@@ -1203,7 +1211,19 @@ def main():
     obs_dim = int(probe_env.observation_space(env_params).shape[0])
     action_dim = int(probe_env.action_space(env_params).n)
 
-    if args.manifest:
+    if args.adhoc_policy_name and args.adhoc_policy_type and args.adhoc_policy_path:
+        specs = [
+            PolicySpec(
+                name=args.adhoc_policy_name,
+                policy_type=args.adhoc_policy_type,
+                policy_path=args.adhoc_policy_path,
+                metadata_path=args.adhoc_policy_meta if args.adhoc_policy_meta else None,
+                skip_n=args.adhoc_policy_skip_n,
+                hidden_mode="raw",  # Default
+                llm_layer=25,
+            )
+        ]
+    elif args.manifest:
         specs = policy_specs_from_manifest(
             manifest_path=args.manifest,
             manifest_policy_ids=args.manifest_policy_ids,
@@ -1270,6 +1290,7 @@ def main():
             name=run_name,
             config=run_cfg,
             reinit=True,
+            settings=wandb.Settings(init_timeout=300),
         )
         wandb.log(_flatten("eval", metrics))
         wandb.log(_training_scalar_summary(training_summary))
