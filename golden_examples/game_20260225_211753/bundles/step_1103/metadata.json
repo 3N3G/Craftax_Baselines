@@ -1,0 +1,22 @@
+{
+  "action_id": 2,
+  "action_name": "RIGHT",
+  "env_name": "Craftax-Symbolic-v1",
+  "env_params_digest": "07a9e97cad51967b58bbd87be7b01e736c5b09a7",
+  "paths": {
+    "after_state_filtered": "after_state_filtered.txt",
+    "after_state_raw": "after_state_raw.txt",
+    "before_state_filtered": "before_state_filtered.txt",
+    "before_state_raw": "before_state_raw.txt",
+    "obs_after": "obs_after.npy",
+    "obs_before": "obs_before.npy",
+    "state_after": "state_after.pbz2",
+    "state_before": "state_before.pbz2"
+  },
+  "reasoning": "remove stone at 0, -1",
+  "repo_commit": "653cf2c",
+  "schema_version": "2.0.0",
+  "session_id": "game_20260225_211753",
+  "step": 1103,
+  "timestamp": "2026-02-26T09:24:49.342325"
+}

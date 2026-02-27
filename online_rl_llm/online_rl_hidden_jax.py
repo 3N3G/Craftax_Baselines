@@ -808,8 +808,6 @@ def run_training_no_llm(
 
 def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_steps: int,
                           model_id: str, target_layer: int, tokens_to_generate: int,
-                          fusion_mode: str, hidden_gate_init_logit: float,
-                          actor_head_layers: int, critic_head_layers: int,
                           use_wandb: bool, seed: int, verbose: bool,
                           save_policy: bool, policy_save_dir: str, run_name: str,
                           checkpoint_every_steps: int, checkpoint_dir: Optional[str],
@@ -839,16 +837,8 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
         action_dim=env.action_space(env_params).n,
         layer_width=Config.LAYER_SIZE,
         hidden_state_dim=llm_manager.hidden_size,
-        fusion_mode=fusion_mode,
-        hidden_gate_init_logit=hidden_gate_init_logit,
-        actor_head_layers=actor_head_layers,
-        critic_head_layers=critic_head_layers,
     )
-    print(
-        f"Using ActorCriticAug fusion_mode={fusion_mode}, "
-        f"hidden_gate_init_logit={hidden_gate_init_logit}, "
-        f"actor_head_layers={actor_head_layers}, critic_head_layers={critic_head_layers}"
-    )
+    print("Using fixed ActorCriticAug architecture (dual-branch concat).")
     rng = jax.random.PRNGKey(seed)
     rng, init_rng = jax.random.split(rng)
     obs_dim = env.observation_space(env_params).shape[0]
@@ -1115,31 +1105,6 @@ def main():
     parser.add_argument("--layer", type=int, default=-1)
     parser.add_argument("--tokens", type=int, default=1)
     parser.add_argument("--model", type=str, default=Config.MODEL_ID)
-    parser.add_argument(
-        "--fusion-mode",
-        type=str,
-        default="concat_raw",
-        choices=["concat_raw", "gated_proj", "residual_gated", "dual_concat"],
-        help="Hidden-state fusion architecture for ActorCriticAug.",
-    )
-    parser.add_argument(
-        "--hidden-gate-init-logit",
-        type=float,
-        default=-4.0,
-        help="Initial logit for hidden-state gate when using gated fusion modes.",
-    )
-    parser.add_argument(
-        "--actor-head-layers",
-        type=int,
-        default=1,
-        help="Number of hidden layers in actor head after fusion.",
-    )
-    parser.add_argument(
-        "--critic-head-layers",
-        type=int,
-        default=2,
-        help="Number of hidden layers in critic head after fusion.",
-    )
     parser.add_argument("--use-wandb", action="store_true", default=True)
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--wandb-project", type=str, default=Config.WANDB_PROJECT)
@@ -1206,7 +1171,6 @@ def main():
     else:
         results = run_training_with_llm(
             args.envs, args.timesteps, args.skip_n, args.num_steps, args.model, args.layer, args.tokens,
-            args.fusion_mode, args.hidden_gate_init_logit, args.actor_head_layers, args.critic_head_layers,
             use_wandb, args.seed, not args.quiet,
             args.save_policy, policy_save_dir, run_name, args.checkpoint_every_steps, checkpoint_dir, resume_from, run_metadata
         )

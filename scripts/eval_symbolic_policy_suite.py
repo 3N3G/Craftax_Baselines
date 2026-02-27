@@ -30,6 +30,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
+import torch
 import wandb
 import yaml
 from flax import serialization
@@ -44,6 +45,7 @@ from craftax.craftax.renderer import render_craftax_pixels  # noqa: E402
 from craftax.craftax_env import make_craftax_env_from_name  # noqa: E402
 from labelling.obs_to_text import obs_to_text  # noqa: E402
 from models.actor_critic import ActorCritic, ActorCriticAug  # noqa: E402
+from offline_rl.awr_llm_augmented import ActorCriticAug as TorchActorCriticAug  # noqa: E402
 from online_rl_llm.online_rl_hidden_jax import LLMHiddenStateManager  # noqa: E402
 from utils.llm_prompts import filter_text_obs  # noqa: E402
 from utils.wrappers import AutoResetEnvWrapper, BatchEnvWrapper, LogWrapper  # noqa: E402
@@ -57,12 +59,14 @@ except Exception:
 @dataclass
 class PolicySpec:
     name: str
-    policy_type: str  # "aug_msgpack" | "ppo_orbax"
+    policy_type: str  # "aug_msgpack" | "torch_offline_aug" | "ppo_orbax"
     policy_path: str
     metadata_path: Optional[str]
     skip_n: int
     hidden_mode: str  # "llm" | "zero" | "none"
     train_step: Optional[int] = None
+    stats_path: Optional[str] = None
+    llm_layer: int = -1
 
 
 def _latest_existing(paths: List[str]) -> Optional[str]:
@@ -191,6 +195,18 @@ def _load_ppo_training_metadata(run_dir: str, step: int) -> Dict:
     return out
 
 
+def _load_offline_training_metadata(checkpoint_path: str, stats_path: Optional[str], llm_layer: int) -> Dict:
+    out = {
+        "checkpoint": str(checkpoint_path),
+        "llm_layer": int(llm_layer),
+    }
+    if stats_path:
+        out["stats_path"] = str(stats_path)
+        if not Path(stats_path).exists():
+            out["stats_missing"] = True
+    return out
+
+
 def _training_scalar_summary(training_summary: Dict) -> Dict[str, float]:
     scalars: Dict[str, float] = {}
     for key in ("final_return_logged", "sps_logged", "llm_calls_logged"):
@@ -220,51 +236,120 @@ def _load_aug_policy(
     action_dim: int,
     hidden_dim: int,
     layer_width: int,
-    actor_head_layers: int,
-    critic_head_layers: int,
 ):
     ckpt = Path(checkpoint_path)
     with ckpt.open("rb") as f:
         blob = f.read()
 
-    # Try known fusion variants in compatibility order.
-    last_err = None
-    for fusion_mode in ("concat_raw", "gated_proj", "residual_gated", "dual_concat"):
-        try:
-            net = ActorCriticAug(
-                action_dim=action_dim,
-                layer_width=layer_width,
-                hidden_state_dim=hidden_dim,
-                fusion_mode=fusion_mode,
-                actor_head_layers=actor_head_layers,
-                critic_head_layers=critic_head_layers,
-            )
-            template = net.init(
-                jax.random.PRNGKey(0),
-                jnp.zeros((1, obs_dim), dtype=jnp.float32),
-                jnp.zeros((1, hidden_dim), dtype=jnp.float32),
-            )
-            params = serialization.from_bytes(template, blob)
+    net = ActorCriticAug(
+        action_dim=action_dim,
+        layer_width=layer_width,
+        hidden_state_dim=hidden_dim,
+    )
+    template = net.init(
+        jax.random.PRNGKey(0),
+        jnp.zeros((1, obs_dim), dtype=jnp.float32),
+        jnp.zeros((1, hidden_dim), dtype=jnp.float32),
+    )
+    params = serialization.from_bytes(template, blob)
 
-            @jax.jit
-            def act_fn(params, obs, hidden, rng):
-                pi, _ = net.apply(params, obs, hidden)
-                return pi.sample(seed=rng)
+    @jax.jit
+    def act_fn(params, obs, hidden, rng):
+        pi, _ = net.apply(params, obs, hidden)
+        return pi.sample(seed=rng)
 
-            @jax.jit
-            def value_fn(params, obs, hidden):
-                _, value = net.apply(params, obs, hidden)
-                return value
+    @jax.jit
+    def value_fn(params, obs, hidden):
+        _, value = net.apply(params, obs, hidden)
+        return value
 
-            return {
-                "params": params,
-                "act_fn": act_fn,
-                "value_fn": value_fn,
-                "fusion_mode_loaded": fusion_mode,
-            }
-        except Exception as e:  # pragma: no cover - defensive
-            last_err = e
-    raise RuntimeError(f"Failed to load augmented checkpoint: {checkpoint_path}\n{last_err}")
+    return {
+        "params": params,
+        "act_fn": act_fn,
+        "value_fn": value_fn,
+        "fusion_mode_loaded": "fixed_dual_branch",
+        "uses_hidden": True,
+        "hidden_mean": np.zeros((hidden_dim,), dtype=np.float32),
+        "hidden_std": np.ones((hidden_dim,), dtype=np.float32),
+    }
+
+
+def _load_torch_offline_policy(checkpoint_path: str, stats_path: Optional[str]):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    raw = torch.load(checkpoint_path, map_location=device)
+    if isinstance(raw, dict) and "model_state_dict" in raw:
+        state_dict = raw["model_state_dict"]
+    else:
+        state_dict = raw
+    if not isinstance(state_dict, dict):
+        raise ValueError(f"Unexpected checkpoint format for {checkpoint_path}")
+
+    if "actor_obs_fc1.weight" not in state_dict:
+        raise KeyError("Missing actor_obs_fc1.weight in offline checkpoint")
+    layer_width = int(state_dict["actor_obs_fc1.weight"].shape[0])
+    obs_dim = int(state_dict["actor_obs_fc1.weight"].shape[1])
+    if "actor_out.weight" in state_dict:
+        action_dim = int(state_dict["actor_out.weight"].shape[0])
+    elif "actor_fc2.weight" in state_dict:
+        action_dim = int(state_dict["actor_fc2.weight"].shape[0])
+    else:
+        raise KeyError("Unable to infer action_dim from checkpoint state_dict")
+
+    if "hidden_proj.weight" in state_dict:
+        hidden_dim = int(state_dict["hidden_proj.weight"].shape[1])
+    elif "actor_hidden_fc1.weight" in state_dict:
+        hidden_dim = int(state_dict["actor_hidden_fc1.weight"].shape[1])
+    else:
+        raise KeyError("Unable to infer hidden_dim from checkpoint state_dict")
+
+    hidden_mean = np.zeros((hidden_dim,), dtype=np.float32)
+    hidden_std = np.ones((hidden_dim,), dtype=np.float32)
+    if stats_path and Path(stats_path).exists():
+        stats = np.load(stats_path)
+        hidden_mean = np.asarray(stats["mean"], dtype=np.float32)
+        hidden_std = np.asarray(stats["std"], dtype=np.float32)
+    hidden_std = np.where(hidden_std < 1e-6, 1.0, hidden_std)
+
+    model = TorchActorCriticAug(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        layer_width=layer_width,
+        hidden_state_dim=hidden_dim,
+    ).to(device)
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+
+    def act_fn(params, obs, hidden, rng):
+        del params, rng
+        obs_np = np.asarray(jax.device_get(obs), dtype=np.float32)
+        hid_np = np.asarray(jax.device_get(hidden), dtype=np.float32)
+        with torch.no_grad():
+            obs_t = torch.from_numpy(obs_np).to(device=device, dtype=torch.float32)
+            hid_t = torch.from_numpy(hid_np).to(device=device, dtype=torch.float32)
+            pi, _ = model(obs_t, hid_t)
+            actions = pi.sample().detach().cpu().numpy().astype(np.int32)
+        return jnp.asarray(actions, dtype=jnp.int32)
+
+    def value_fn(params, obs, hidden):
+        del params
+        obs_np = np.asarray(jax.device_get(obs), dtype=np.float32)
+        hid_np = np.asarray(jax.device_get(hidden), dtype=np.float32)
+        with torch.no_grad():
+            obs_t = torch.from_numpy(obs_np).to(device=device, dtype=torch.float32)
+            hid_t = torch.from_numpy(hid_np).to(device=device, dtype=torch.float32)
+            _, value = model(obs_t, hid_t)
+            value_np = value.detach().cpu().numpy().astype(np.float32)
+        return jnp.asarray(value_np, dtype=jnp.float32)
+
+    return {
+        "params": None,
+        "act_fn": act_fn,
+        "value_fn": value_fn,
+        "uses_hidden": True,
+        "hidden_mean": hidden_mean,
+        "hidden_std": hidden_std,
+        "framework": "torch",
+    }
 
 
 def _load_ppo_policy(run_dir: str, step: int, obs_dim: int, action_dim: int):
@@ -305,6 +390,9 @@ def _load_ppo_policy(run_dir: str, step: int, obs_dim: int, action_dim: int):
         "act_fn": act_fn,
         "value_fn": value_fn,
         "layer_size": layer_size,
+        "uses_hidden": False,
+        "hidden_mean": None,
+        "hidden_std": None,
     }
 
 
@@ -353,6 +441,18 @@ def _compute_empirical_rtg(rewards: List[float], gamma: float) -> np.ndarray:
         running = float(rewards[i]) + gamma * running
         rtg[i] = running
     return rtg
+
+
+def _normalize_hidden(
+    hidden: jnp.ndarray,
+    hidden_mean: Optional[np.ndarray],
+    hidden_std: Optional[np.ndarray],
+) -> jnp.ndarray:
+    if hidden_mean is None or hidden_std is None:
+        return hidden
+    mean = jnp.asarray(hidden_mean, dtype=jnp.float32)
+    std = jnp.asarray(hidden_std, dtype=jnp.float32)
+    return (hidden - mean[None, :]) / std[None, :]
 
 
 def _sanitize_llm_text(text: str, max_words: int) -> str:
@@ -509,8 +609,11 @@ def evaluate_policy(
             action_dim=action_dim,
             hidden_dim=args.hidden_dim,
             layer_width=args.layer_width,
-            actor_head_layers=args.aug_actor_head_layers,
-            critic_head_layers=args.aug_critic_head_layers,
+        )
+    elif spec.policy_type == "torch_offline_aug":
+        policy = _load_torch_offline_policy(
+            checkpoint_path=spec.policy_path,
+            stats_path=spec.stats_path,
         )
     elif spec.policy_type == "ppo_orbax":
         policy = _load_ppo_policy(
@@ -522,11 +625,19 @@ def evaluate_policy(
     else:
         raise ValueError(f"Unsupported policy type: {spec.policy_type}")
 
+    uses_hidden = bool(policy.get("uses_hidden", False))
+    hidden_mean = policy.get("hidden_mean")
+    hidden_std = policy.get("hidden_std")
+    if uses_hidden and hidden_mean is not None:
+        hidden_dim = int(np.asarray(hidden_mean).shape[0])
+    else:
+        hidden_dim = int(args.hidden_dim)
+
     rng = jax.random.PRNGKey(args.seed)
     rng, rr = jax.random.split(rng)
     obs, env_state = env.reset(rr, env_params)
 
-    hidden = jnp.zeros((args.num_envs, args.hidden_dim), dtype=jnp.float32)
+    hidden = jnp.zeros((args.num_envs, hidden_dim), dtype=jnp.float32)
     steps_since_llm = spec.skip_n
     llm_calls = 0
     llm_time_ms = []
@@ -541,13 +652,13 @@ def evaluate_policy(
     start = time.time()
     steps = 0
     while episode_counter < args.target_episodes and steps < args.max_env_steps:
-        if spec.policy_type == "aug_msgpack":
+        if uses_hidden:
             if spec.hidden_mode == "llm":
                 if llm_manager is None:
                     raise RuntimeError("LLM manager required for hidden_mode=llm")
                 if steps_since_llm >= spec.skip_n:
-                    t0 = time.time()
-                    hidden, hm = llm_manager.extract(obs, args.num_envs)
+                    hidden_raw, hm = llm_manager.extract(obs, args.num_envs)
+                    hidden = _normalize_hidden(hidden_raw, hidden_mean, hidden_std)
                     llm_calls += 1
                     steps_since_llm = 0
                     llm_time_ms.append(float(hm.get("timing/llm_inference_ms", 0.0)))
@@ -555,7 +666,7 @@ def evaluate_policy(
             elif spec.hidden_mode == "zero":
                 hidden = jnp.zeros_like(hidden)
             else:
-                raise ValueError(f"Unsupported hidden_mode for aug policy: {spec.hidden_mode}")
+                raise ValueError(f"Unsupported hidden_mode for hidden policy: {spec.hidden_mode}")
 
             rng, ar = jax.random.split(rng)
             action = policy["act_fn"](policy["params"], obs, hidden, ar)
@@ -639,7 +750,14 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
     rng, rr = jax.random.split(rng)
     obs, state = env.reset(rr, env_params)
 
-    hidden = jnp.zeros((1, args.hidden_dim), dtype=jnp.float32)
+    uses_hidden = bool(policy.get("uses_hidden", False))
+    hidden_mean = policy.get("hidden_mean")
+    hidden_std = policy.get("hidden_std")
+    if uses_hidden and hidden_mean is not None:
+        hidden_dim = int(np.asarray(hidden_mean).shape[0])
+    else:
+        hidden_dim = int(args.hidden_dim)
+    hidden = jnp.zeros((1, hidden_dim), dtype=jnp.float32)
     steps_since_llm = spec.skip_n
     llm_calls = 0
     ep_return = 0.0
@@ -652,14 +770,15 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
     latest_llm_text = "LLM: (no generated text)"
 
     for step in range(args.video_max_steps):
-        if spec.policy_type == "aug_msgpack":
+        if uses_hidden:
             if spec.hidden_mode == "llm":
                 if llm_manager is None:
                     raise RuntimeError("LLM manager required for hidden_mode=llm")
                 if steps_since_llm >= spec.skip_n:
                     # Keep policy conditioning identical to training/eval:
                     # hidden comes from the same manager.extract() prefill path.
-                    hidden, _ = llm_manager.extract(obs[None, ...], 1)
+                    hidden_raw, _ = llm_manager.extract(obs[None, ...], 1)
+                    hidden = _normalize_hidden(hidden_raw, hidden_mean, hidden_std)
                     generated_text = _generate_llm_text_for_video(
                         llm_manager=llm_manager,
                         obs_single=obs,
@@ -671,7 +790,7 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
             elif spec.hidden_mode == "zero":
                 hidden = jnp.zeros_like(hidden)
 
-        if spec.policy_type == "aug_msgpack":
+        if uses_hidden:
             value = float(
                 np.asarray(
                     jax.device_get(policy["value_fn"](policy["params"], obs[None, ...], hidden)),
@@ -698,7 +817,7 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
         predicted_values.append(value)
 
         rng, ar = jax.random.split(rng)
-        if spec.policy_type == "aug_msgpack":
+        if uses_hidden:
             action = policy["act_fn"](policy["params"], obs[None, ...], hidden, ar)[0]
             steps_since_llm += 1
         else:
@@ -761,6 +880,67 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
     video = np.stack(frames, axis=0)  # [T, H, W, C]
     video = np.transpose(video, (0, 3, 1, 2))  # [T, C, H, W]
     return video
+
+
+def _get_llm_manager(
+    llm_manager_by_layer: Dict[int, LLMHiddenStateManager], args, llm_layer: int
+) -> LLMHiddenStateManager:
+    layer = int(llm_layer)
+    if layer not in llm_manager_by_layer:
+        print(f"Initializing shared LLM hidden-state manager for layer={layer}...", flush=True)
+        llm_manager_by_layer[layer] = LLMHiddenStateManager(
+            model_id="Qwen/Qwen3-4B",
+            target_layer=layer,
+            tokens_to_generate=args.llm_tokens,
+        )
+    return llm_manager_by_layer[layer]
+
+
+def policy_specs_from_manifest(manifest_path: str, manifest_policy_ids: str) -> List[PolicySpec]:
+    from scripts.eval_policy_wave import resolve_manifest_policies
+
+    manifest_p = Path(manifest_path).expanduser().resolve()
+    manifest = yaml.safe_load(manifest_p.read_text())
+    resolved = resolve_manifest_policies(manifest, include_slices=False, slice_count=0)
+
+    policy_cfg = {str(p.get("id")): p for p in manifest.get("policies", [])}
+    wanted = [x.strip() for x in str(manifest_policy_ids).split(",") if x.strip()]
+    if wanted:
+        wanted_set = set(wanted)
+        resolved = [r for r in resolved if r.policy_id in wanted_set]
+        missing = sorted(wanted_set - {r.policy_id for r in resolved})
+        if missing:
+            raise ValueError(f"Missing manifest_policy_ids in resolved manifest: {missing}")
+
+    out: List[PolicySpec] = []
+    for r in resolved:
+        if r.policy_type == "jax_aug_msgpack":
+            kind = "aug_msgpack"
+        elif r.policy_type == "torch_offline_aug":
+            kind = "torch_offline_aug"
+        elif r.policy_type == "ppo_orbax":
+            kind = "ppo_orbax"
+        else:
+            continue
+
+        cfg = policy_cfg.get(r.policy_id, {})
+        out.append(
+            PolicySpec(
+                name=str(r.policy_id),
+                policy_type=kind,
+                policy_path=str(r.checkpoint_path),
+                metadata_path=r.metadata_path,
+                skip_n=int(r.skip_n),
+                hidden_mode=str(r.hidden_mode),
+                train_step=r.train_step,
+                stats_path=r.stats_path,
+                llm_layer=int(cfg.get("llm_layer", -1)),
+            )
+        )
+
+    if not out:
+        raise ValueError(f"No supported policies resolved from manifest: {manifest_p}")
+    return out
 
 
 def default_policy_specs(args) -> List[PolicySpec]:
@@ -828,8 +1008,6 @@ def main():
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--layer-width", type=int, default=512)
     parser.add_argument("--hidden-dim", type=int, default=2560)
-    parser.add_argument("--aug-actor-head-layers", type=int, default=1)
-    parser.add_argument("--aug-critic-head-layers", type=int, default=2)
     parser.add_argument(
         "--llm-tokens",
         type=int,
@@ -855,6 +1033,18 @@ def main():
         type=float,
         default=0.99,
         help="Discount for empirical RTG overlay curve in videos.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=str,
+        default="",
+        help="Optional manifest yaml. If set, policy specs are resolved from manifest.",
+    )
+    parser.add_argument(
+        "--manifest-policy-ids",
+        type=str,
+        default="",
+        help="Optional comma-separated policy ids to include from --manifest.",
     )
     parser.add_argument("--output-json", type=str, default="logs/policy_eval_craftax_symbolic_evals.json")
     parser.add_argument(
@@ -905,17 +1095,15 @@ def main():
     obs_dim = int(probe_env.observation_space(env_params).shape[0])
     action_dim = int(probe_env.action_space(env_params).n)
 
-    all_specs = default_policy_specs(args)
-    specs = select_policy_specs(all_specs, args.policies)
-    needs_llm = any(s.hidden_mode == "llm" for s in specs)
-    llm_manager = None
-    if needs_llm:
-        print("Initializing shared LLM hidden-state manager...", flush=True)
-        llm_manager = LLMHiddenStateManager(
-            model_id="Qwen/Qwen3-4B",
-            target_layer=-1,
-            tokens_to_generate=args.llm_tokens,
+    if args.manifest:
+        specs = policy_specs_from_manifest(
+            manifest_path=args.manifest,
+            manifest_policy_ids=args.manifest_policy_ids,
         )
+    else:
+        all_specs = default_policy_specs(args)
+        specs = select_policy_specs(all_specs, args.policies)
+    llm_manager_by_layer: Dict[int, LLMHiddenStateManager] = {}
 
     out = {
         "timestamp": datetime.now().isoformat(),
@@ -927,8 +1115,15 @@ def main():
 
     for spec in specs:
         print(f"\n=== Evaluating {spec.name} ===", flush=True)
+        llm_manager = _get_llm_manager(llm_manager_by_layer, args, spec.llm_layer) if spec.hidden_mode == "llm" else None
         if spec.policy_type == "aug_msgpack":
             training_summary = _load_online_training_metadata(spec.metadata_path)
+        elif spec.policy_type == "torch_offline_aug":
+            training_summary = _load_offline_training_metadata(
+                checkpoint_path=spec.policy_path,
+                stats_path=spec.stats_path,
+                llm_layer=spec.llm_layer,
+            )
         else:
             training_summary = _load_ppo_training_metadata(spec.policy_path, int(spec.train_step))
 
@@ -947,11 +1142,10 @@ def main():
             "policy_path": spec.policy_path,
             "hidden_mode_eval": spec.hidden_mode,
             "skip_n": int(spec.skip_n),
+            "llm_layer": int(spec.llm_layer),
             "target_episodes": int(args.target_episodes),
             "num_envs": int(args.num_envs),
             "max_env_steps": int(args.max_env_steps),
-            "aug_actor_head_layers": int(args.aug_actor_head_layers),
-            "aug_critic_head_layers": int(args.aug_critic_head_layers),
             "llm_tokens": int(args.llm_tokens),
             "video_max_steps": int(args.video_max_steps),
             "video_llm_tokens": int(args.video_llm_tokens),

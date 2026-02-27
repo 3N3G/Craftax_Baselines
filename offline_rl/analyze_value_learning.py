@@ -258,21 +258,11 @@ class TorchValueModel:
         self.torch = torch
         self.device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
         state_dict = torch.load(checkpoint_path, map_location=self.device)
-        fusion_mode = (
-            "gated_proj"
-            if (
-                "hidden_gate_logit" in state_dict
-                or "hidden_proj.weight" in state_dict
-                or "hidden_ln.weight" in state_dict
-            )
-            else "concat_raw"
-        )
         self.model = ActorCriticAug(
             obs_dim=obs_dim,
             action_dim=action_dim,
             layer_width=layer_width,
             hidden_state_dim=hidden_dim,
-            fusion_mode=fusion_mode,
         ).to(self.device)
         self.model.load_state_dict(state_dict, strict=True)
         self.model.eval()

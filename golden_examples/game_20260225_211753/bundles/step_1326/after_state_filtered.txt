@@ -1,0 +1,40 @@
+Map (interesting tiles only): 0, -1:Fireball on path, 0, 0:torch on path, -3, 1:stone, 4, 1:Snail on path, -5, 2:wall_moss, 0, 4:torch on path
+Inventory:
+Wood: 22
+Stone: 64
+Coal: 5
+Iron: 1
+Diamond: 0
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 11
+Arrow: 3
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 2
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 6
+Energy: 6
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: down
+Light: 0.7410082221031189
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: False
+Is Boss Vulnerable: False

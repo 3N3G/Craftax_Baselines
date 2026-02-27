@@ -1,10 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# Launch offline AWR-LLM grid over fusion mode x hidden skip cadence.
-# Default matrix:
-#   fusion in {concat_raw, gated_proj, residual_gated}
-#   hidden_skip_n in {1, 5, 25}
+# Launch offline AWR-LLM sweep over hidden skip cadence only.
+# Fixed architecture is dual-branch ActorCriticAug (same as online).
+# Default skips: {1, 5, 25}
 #
 # Existing jobs/checkpoints are skipped by default.
 
@@ -35,9 +34,7 @@ parse_csv() {
     fi
 }
 
-FUSIONS_CSV="${FUSIONS:-concat_raw,gated_proj,residual_gated}"
 SKIPS_CSV="${SKIPS:-1,5,25}"
-parse_csv "${FUSIONS_CSV}" FUSIONS
 parse_csv "${SKIPS_CSV}" SKIPS
 
 RUN_TAG="${RUN_TAG:-offline_grid_$(date +%Y%m%d_%H%M%S)}"
@@ -72,6 +69,12 @@ fi
 if [[ "${DISABLE_AUTO_FILE_LIMIT:-0}" == "1" ]]; then
     common_exports+=("DISABLE_AUTO_FILE_LIMIT=1")
 fi
+if [[ -n "${DATASET_SHARD_STEPS:-}" ]]; then
+    common_exports+=("DATASET_SHARD_STEPS=${DATASET_SHARD_STEPS}")
+fi
+if [[ "${DISABLE_DATASET_SHARD_ROTATION:-0}" == "1" ]]; then
+    common_exports+=("DISABLE_DATASET_SHARD_ROTATION=1")
+fi
 if [[ "${HIDDEN_SKIP_RESET_ON_DONE:-0}" == "1" ]]; then
     common_exports+=("HIDDEN_SKIP_RESET_ON_DONE=1")
 fi
@@ -89,49 +92,46 @@ skipped_completed=0
 skipped_queued=0
 submitted_ids=()
 
-for fusion in "${FUSIONS[@]}"; do
-    for skip in "${SKIPS[@]}"; do
-        if ! [[ "${skip}" =~ ^[0-9]+$ ]] || [[ "${skip}" -lt 1 ]]; then
-            echo "Invalid skip value: ${skip}"
-            exit 1
-        fi
+for skip in "${SKIPS[@]}"; do
+    if ! [[ "${skip}" =~ ^[0-9]+$ ]] || [[ "${skip}" -lt 1 ]]; then
+        echo "Invalid skip value: ${skip}"
+        exit 1
+    fi
 
-        run_key="${RUN_TAG}_${fusion}_skip${skip}_real"
-        save_dir="${SAVE_DIR_BASE}/${run_key}"
-        wandb_name="${run_key}"
-        job_name="awr_${fusion}_s${skip}"
+    run_key="${RUN_TAG}_skip${skip}_real"
+    save_dir="${SAVE_DIR_BASE}/${run_key}"
+    wandb_name="${run_key}"
+    job_name="awr_dual_s${skip}"
 
-        if [[ "${SKIP_COMPLETED}" == "1" && -f "${save_dir}/awr_llm_final.pth" ]]; then
-            echo "[skip-completed] ${run_key} (${save_dir}/awr_llm_final.pth exists)"
-            skipped_completed=$((skipped_completed + 1))
-            continue
-        fi
+    if [[ "${SKIP_COMPLETED}" == "1" && -f "${save_dir}/awr_llm_final.pth" ]]; then
+        echo "[skip-completed] ${run_key} (${save_dir}/awr_llm_final.pth exists)"
+        skipped_completed=$((skipped_completed + 1))
+        continue
+    fi
 
-        if [[ "${SKIP_QUEUED}" == "1" ]] && is_queued "${job_name}"; then
-            echo "[skip-queued] ${run_key} (job name ${job_name} already in queue)"
-            skipped_queued=$((skipped_queued + 1))
-            continue
-        fi
+    if [[ "${SKIP_QUEUED}" == "1" ]] && is_queued "${job_name}"; then
+        echo "[skip-queued] ${run_key} (job name ${job_name} already in queue)"
+        skipped_queued=$((skipped_queued + 1))
+        continue
+    fi
 
-        exports="$(IFS=,; echo "${common_exports[*]},SAVE_DIR=${save_dir},WANDB_NAME=${wandb_name},FUSION_MODE=${fusion},HIDDEN_SKIP_N=${skip}")"
-        cmd=(
-            sbatch
-            --job-name "${job_name}"
-            --export "${exports}"
-            "${SBATCH_FILE}"
-        )
+    exports="$(IFS=,; echo "${common_exports[*]},SAVE_DIR=${save_dir},WANDB_NAME=${wandb_name},HIDDEN_SKIP_N=${skip}")"
+    cmd=(
+        sbatch
+        --job-name "${job_name}"
+        --export "${exports}"
+        "${SBATCH_FILE}"
+    )
 
-        if [[ "${DRY_RUN}" == "1" ]]; then
-            echo "[dry-run] ${cmd[*]}"
-            continue
-        fi
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        echo "[dry-run] ${cmd[*]}"
+        continue
+    fi
 
-        job_id="$(${cmd[@]} | awk '{print $4}')"
-        echo "[submitted] ${run_key} -> ${job_id}"
-        submitted=$((submitted + 1))
-        submitted_ids+=("${job_id}")
-    done
-
+    job_id="$(${cmd[@]} | awk '{print $4}')"
+    echo "[submitted] ${run_key} -> ${job_id}"
+    submitted=$((submitted + 1))
+    submitted_ids+=("${job_id}")
 done
 
 echo ""

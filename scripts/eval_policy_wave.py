@@ -93,7 +93,7 @@ class ResolvedPolicy:
 
 class SharedLLMManager:
     def __init__(self, model_id: str, target_layer: int, tokens_to_generate: int):
-        vllm_url = "http://localhost:8000"
+        vllm_url = os.environ.get("VLLM_URL", "http://localhost:8000").rstrip("/")
         resp = requests.get(f"{vllm_url}/health", timeout=2)
         if resp.status_code != 200:
             raise RuntimeError(f"vLLM /health returned {resp.status_code}")
@@ -180,6 +180,11 @@ def parse_tracks(text: str) -> List[str]:
     return vals or ["id"]
 
 
+def parse_policy_ids(text: str) -> List[str]:
+    vals = [x.strip() for x in str(text).split(",") if x.strip()]
+    return vals
+
+
 def parse_step_from_path(path: str) -> int:
     name = Path(path).name
     for pat in (r"(?:checkpoint_|step_)(\d+)", r"(\d{5,})"):
@@ -244,6 +249,9 @@ def resolve_slice_paths(
 
 
 def infer_offline_fusion_mode(state_dict: Dict[str, torch.Tensor], hidden_dim: int) -> str:
+    if "actor_obs_fc1.weight" in state_dict and "actor_hidden_fc1.weight" in state_dict:
+        return "dual_concat"
+
     actor_in = int(state_dict["actor_fc1.weight"].shape[1])
     layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
     if actor_in == layer_width + hidden_dim:
@@ -264,12 +272,26 @@ def infer_offline_fusion_mode(state_dict: Dict[str, torch.Tensor], hidden_dim: i
 def load_torch_offline_policy(spec: ResolvedPolicy, device: torch.device):
     state_dict = torch.load(spec.checkpoint_path, map_location=device)
 
-    obs_dim = int(state_dict["encoder_fc1.weight"].shape[1])
-    layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
-    action_dim = int(state_dict["actor_fc2.weight"].shape[0])
+    if "encoder_fc1.weight" in state_dict:
+        obs_dim = int(state_dict["encoder_fc1.weight"].shape[1])
+        layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
+    elif "actor_obs_fc1.weight" in state_dict:
+        obs_dim = int(state_dict["actor_obs_fc1.weight"].shape[1])
+        layer_width = int(state_dict["actor_obs_fc1.weight"].shape[0])
+    else:
+        raise KeyError("Unable to infer obs/layer dims from checkpoint state_dict")
+
+    if "actor_out.weight" in state_dict:
+        action_dim = int(state_dict["actor_out.weight"].shape[0])
+    elif "actor_fc2.weight" in state_dict:
+        action_dim = int(state_dict["actor_fc2.weight"].shape[0])
+    else:
+        raise KeyError("Unable to infer action_dim from checkpoint state_dict")
 
     if "hidden_proj.weight" in state_dict:
         hidden_dim = int(state_dict["hidden_proj.weight"].shape[1])
+    elif "actor_hidden_fc1.weight" in state_dict:
+        hidden_dim = int(state_dict["actor_hidden_fc1.weight"].shape[1])
     else:
         hidden_dim = int(spec.hidden_dim)
 
@@ -283,13 +305,11 @@ def load_torch_offline_policy(spec: ResolvedPolicy, device: torch.device):
         hidden_std = np.ones((hidden_dim,), dtype=np.float32)
     hidden_std = np.where(hidden_std < 1e-6, 1.0, hidden_std)
 
-    fusion_mode = infer_offline_fusion_mode(state_dict, hidden_dim=hidden_dim)
     model = TorchActorCriticAug(
         obs_dim=obs_dim,
         action_dim=action_dim,
         layer_width=layer_width,
         hidden_state_dim=hidden_dim,
-        fusion_mode=fusion_mode,
     ).to(device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -324,7 +344,7 @@ def load_torch_offline_policy(spec: ResolvedPolicy, device: torch.device):
         "act_fn": act_fn,
         "value_fn": value_fn,
         "metadata": {
-            "fusion_mode": fusion_mode,
+            "fusion_mode": "fixed_dual_branch",
             "checkpoint": spec.checkpoint_path,
             "stats_path": str(stats_path) if stats_path else None,
         },
@@ -343,49 +363,35 @@ def load_jax_aug_policy(spec: ResolvedPolicy):
     hidden_dim = int(spec.hidden_dim)
     layer_width = int(spec.layer_width)
 
-    last_error = None
-    loaded = None
-    for fusion in ("concat_raw", "gated_proj", "residual_gated", "dual_concat"):
-        try:
-            net = ActorCriticAug(
-                action_dim=action_dim,
-                layer_width=layer_width,
-                hidden_state_dim=hidden_dim,
-                fusion_mode=fusion,
-                actor_head_layers=int(spec.actor_head_layers),
-                critic_head_layers=int(spec.critic_head_layers),
-            )
-            template = net.init(
-                jax.random.PRNGKey(0),
-                jnp.zeros((1, obs_dim), dtype=jnp.float32),
-                jnp.zeros((1, hidden_dim), dtype=jnp.float32),
-            )
-            params = serialization.from_bytes(template, blob)
+    net = ActorCriticAug(
+        action_dim=action_dim,
+        layer_width=layer_width,
+        hidden_state_dim=hidden_dim,
+    )
+    template = net.init(
+        jax.random.PRNGKey(0),
+        jnp.zeros((1, obs_dim), dtype=jnp.float32),
+        jnp.zeros((1, hidden_dim), dtype=jnp.float32),
+    )
+    params = serialization.from_bytes(template, blob)
 
-            @jax.jit
-            def _act(params, obs, hidden, rng, deterministic=False):
-                pi, _ = net.apply(params, obs, hidden)
-                if deterministic:
-                    return jnp.argmax(pi.logits, axis=-1)
-                return pi.sample(seed=rng)
+    @jax.jit
+    def _act(params, obs, hidden, rng, deterministic=False):
+        pi, _ = net.apply(params, obs, hidden)
+        return jax.lax.cond(
+            jnp.asarray(deterministic, dtype=jnp.bool_),
+            lambda _: jnp.argmax(pi.logits, axis=-1),
+            lambda _: pi.sample(seed=rng),
+            operand=None,
+        )
 
-            @jax.jit
-            def _value(params, obs, hidden):
-                _, value = net.apply(params, obs, hidden)
-                return value
-
-            loaded = (params, _act, _value, fusion)
-            break
-        except Exception as exc:  # pragma: no cover
-            last_error = exc
-
-    if loaded is None:
-        raise RuntimeError(f"Failed to load augmented JAX checkpoint: {ckpt}\n{last_error}")
-
-    params, act_fn_jax, value_fn_jax, fusion_loaded = loaded
+    @jax.jit
+    def _value(params, obs, hidden):
+        _, value = net.apply(params, obs, hidden)
+        return value
 
     def act_fn(obs_np: np.ndarray, hidden_np: np.ndarray, deterministic: bool, rng: jax.Array):
-        action = act_fn_jax(
+        action = _act(
             params,
             jnp.asarray(obs_np, dtype=jnp.float32),
             jnp.asarray(hidden_np, dtype=jnp.float32),
@@ -395,7 +401,7 @@ def load_jax_aug_policy(spec: ResolvedPolicy):
         return np.asarray(jax.device_get(action), dtype=np.int32)
 
     def value_fn(obs_np: np.ndarray, hidden_np: np.ndarray):
-        value = value_fn_jax(
+        value = _value(
             params,
             jnp.asarray(obs_np, dtype=jnp.float32),
             jnp.asarray(hidden_np, dtype=jnp.float32),
@@ -413,7 +419,7 @@ def load_jax_aug_policy(spec: ResolvedPolicy):
         "act_fn": act_fn,
         "value_fn": value_fn,
         "metadata": {
-            "fusion_mode": fusion_loaded,
+            "fusion_mode": "fixed_dual_branch",
             "checkpoint": spec.checkpoint_path,
         },
     }
@@ -436,9 +442,12 @@ def load_ppo_msgpack_policy(spec: ResolvedPolicy):
     @jax.jit
     def _act(params, obs, rng, deterministic=False):
         pi, _ = net.apply(params, obs)
-        if deterministic:
-            return jnp.argmax(pi.logits, axis=-1)
-        return pi.sample(seed=rng)
+        return jax.lax.cond(
+            jnp.asarray(deterministic, dtype=jnp.bool_),
+            lambda _: jnp.argmax(pi.logits, axis=-1),
+            lambda _: pi.sample(seed=rng),
+            operand=None,
+        )
 
     @jax.jit
     def _value(params, obs):
@@ -509,9 +518,12 @@ def load_ppo_orbax_policy(spec: ResolvedPolicy):
     @jax.jit
     def _act(params, obs, rng, deterministic=False):
         pi, _ = net.apply(params, obs)
-        if deterministic:
-            return jnp.argmax(pi.logits, axis=-1)
-        return pi.sample(seed=rng)
+        return jax.lax.cond(
+            jnp.asarray(deterministic, dtype=jnp.bool_),
+            lambda _: jnp.argmax(pi.logits, axis=-1),
+            lambda _: pi.sample(seed=rng),
+            operand=None,
+        )
 
     @jax.jit
     def _value(params, obs):
@@ -1082,7 +1094,16 @@ def maybe_init_wandb(args, manifest: Dict):
     if wandb is None:
         raise ImportError("wandb is not installed; rerun with --no_wandb")
 
-    run_name = f"{manifest.get('wave_name', 'policy_wave')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    policy_tag = "all"
+    policy_ids = parse_policy_ids(args.policy_ids)
+    if policy_ids:
+        policy_tag = "-".join(policy_ids[:3])
+    policy_tag = re.sub(r"[^a-zA-Z0-9_.-]+", "_", policy_tag)[:64]
+
+    run_name = (
+        f"{manifest.get('wave_name', 'policy_wave')}_{policy_tag}_"
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
     run = wandb.init(
         project=args.wandb_project,
         entity=args.wandb_entity,
@@ -1096,6 +1117,7 @@ def maybe_init_wandb(args, manifest: Dict):
             "max_env_steps": args.max_env_steps,
             "include_slices": args.include_slices,
             "slice_count": args.slice_count,
+            "policy_ids": args.policy_ids,
         },
     )
     return run
@@ -1106,7 +1128,9 @@ def main():
     parser.add_argument("--manifest", type=str, required=True)
     parser.add_argument("--tracks", type=str, default="id,value,ood,gameplay_llm")
     parser.add_argument("--output_dir", type=str, default=str(REPO_ROOT / "analysis" / "policy_wave_v2"))
+    parser.add_argument("--summary_path", type=str, default="")
     parser.add_argument("--seeds", type=str, default="42")
+    parser.add_argument("--policy_ids", type=str, default="")
     parser.add_argument("--num_envs", type=int, default=128)
     parser.add_argument("--num_episodes", type=int, default=128)
     parser.add_argument("--max_env_steps", type=int, default=80000)
@@ -1121,7 +1145,7 @@ def main():
     parser.add_argument("--llm_hidden_tokens", type=int, default=1)
     parser.add_argument("--llm_generation_tokens", type=int, default=0)
 
-    parser.add_argument("--value_dataset_dir", type=str, default="/data/group_data/rl/geney/vllm_craftax_labelled_results_with_returns_exact")
+    parser.add_argument("--value_dataset_dir", type=str, default="/data/group_data/rl/geney/vllm_craftax_labelled_results")
     parser.add_argument("--value_data_glob", type=str, default="trajectories_batch_*.npz")
     parser.add_argument("--value_num_samples", type=int, default=20000)
     parser.add_argument("--value_hidden_mode", type=str, default="real", choices=["real", "zero"])
@@ -1141,6 +1165,7 @@ def main():
 
     tracks = parse_tracks(args.tracks)
     seeds = parse_seed_list(args.seeds)
+    requested_policy_ids = parse_policy_ids(args.policy_ids)
     value_pairs = [x.strip() for x in str(args.value_pairs).split(",") if x.strip()]
     bundle_dirs = [x.strip() for x in str(args.bundle_dirs).split(",") if x.strip()]
 
@@ -1148,6 +1173,19 @@ def main():
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
     manifest = yaml.safe_load(manifest_path.read_text())
+    if requested_policy_ids:
+        requested_set = set(requested_policy_ids)
+        source_policies = manifest.get("policies", [])
+        selected_policies = [p for p in source_policies if str(p.get("id", "")) in requested_set]
+        resolved_ids = {str(p.get("id", "")) for p in selected_policies}
+        missing = sorted(requested_set - resolved_ids)
+        if missing:
+            raise RuntimeError(
+                f"Requested policy_ids missing from manifest: {missing}. "
+                f"Manifest={manifest_path}"
+            )
+        manifest = dict(manifest)
+        manifest["policies"] = selected_policies
 
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1222,6 +1260,7 @@ def main():
         "manifest": str(manifest_path),
         "tracks": tracks,
         "num_policies": len(specs),
+        "policy_ids": [spec.policy_id for spec in specs],
         "seeds": seeds,
         "results": {
             "id": {},
@@ -1359,7 +1398,14 @@ def main():
             torch_device=str(device),
         )
 
-    summary_path = output_dir / "policy_wave_v2_summary.json"
+    if args.summary_path:
+        summary_path = Path(args.summary_path).expanduser()
+        if not summary_path.is_absolute():
+            summary_path = output_dir / summary_path
+        summary_path = summary_path.resolve()
+    else:
+        summary_path = output_dir / "policy_wave_v2_summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(output, indent=2))
     print(f"Wrote summary: {summary_path}")
 

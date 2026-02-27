@@ -77,10 +77,6 @@ CHECKPOINT_EVERY_STEPS=${7:-10000000}
 POLICY_SAVE_DIR=${8:-/data/group_data/rl/geney/online_rl_hidden_models}
 CHECKPOINT_DIR=${9:-}
 RESUME_FROM=${10:-}
-FUSION_MODE=${FUSION_MODE:-concat_raw}
-HIDDEN_GATE_INIT_LOGIT=${HIDDEN_GATE_INIT_LOGIT:--4.0}
-ACTOR_HEAD_LAYERS=${ACTOR_HEAD_LAYERS:-1}
-CRITIC_HEAD_LAYERS=${CRITIC_HEAD_LAYERS:-2}
 NO_LLM=${NO_LLM:-0}
 RUN_NAME=${RUN_NAME:-}
 VLLM_PORT_BASE=${VLLM_PORT_BASE:-18000}
@@ -100,10 +96,7 @@ echo "Skip-N: $SKIP_N (LLM inference every $SKIP_N steps)"
 echo "Num-steps/update: $NUM_STEPS"
 echo "Extract layer: $LAYER"
 echo "Tokens to generate: $TOKENS"
-echo "Fusion mode: $FUSION_MODE"
-echo "Hidden gate init logit: $HIDDEN_GATE_INIT_LOGIT"
-echo "Actor head layers: $ACTOR_HEAD_LAYERS"
-echo "Critic head layers: $CRITIC_HEAD_LAYERS"
+echo "Architecture: fixed ActorCriticAug dual-branch concat"
 echo "No LLM mode: $NO_LLM"
 echo "Policy save dir: $POLICY_SAVE_DIR"
 echo "Checkpoint every steps: $CHECKPOINT_EVERY_STEPS"
@@ -219,10 +212,6 @@ PY_ARGS=(
     --num-steps "$NUM_STEPS"
     --layer "$LAYER"
     --tokens "$TOKENS"
-    --fusion-mode "$FUSION_MODE"
-    --hidden-gate-init-logit "$HIDDEN_GATE_INIT_LOGIT"
-    --actor-head-layers "$ACTOR_HEAD_LAYERS"
-    --critic-head-layers "$CRITIC_HEAD_LAYERS"
     --policy-save-dir "$POLICY_SAVE_DIR"
     --checkpoint-every-steps "$CHECKPOINT_EVERY_STEPS"
     --wandb-project craftax-online-rl-llm

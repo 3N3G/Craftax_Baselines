@@ -1,0 +1,140 @@
+Map:
+-5, -4: darkness
+-4, -4: wall
+-3, -4: path
+-2, -4: path
+-1, -4: path
+0, -4: path
+1, -4: path
+2, -4: path
+3, -4: path
+4, -4: wall
+5, -4: wall_moss
+-5, -3: darkness
+-4, -3: wall
+-3, -3: path
+-2, -3: path
+-1, -3: path
+0, -3: path
+1, -3: path
+2, -3: path
+3, -3: path
+4, -3: wall
+5, -3: darkness
+-5, -2: darkness
+-4, -2: wall_moss
+-3, -2: path
+-2, -2: path
+-1, -2: path
+0, -2: path
+1, -2: path
+2, -2: path
+3, -2: path
+4, -2: wall
+5, -2: darkness
+-5, -1: darkness
+-4, -1: wall
+-3, -1: path
+-2, -1: path
+-1, -1: path
+0, -1: path
+1, -1: Fireball on path
+2, -1: path
+3, -1: path
+4, -1: wall
+5, -1: darkness
+-5, 0: darkness
+-4, 0: wall
+-3, 0: path
+-2, 0: path
+-1, 0: path
+0, 0: path
+1, 0: path
+2, 0: path
+3, 0: path
+4, 0: wall
+5, 0: darkness
+-5, 1: darkness
+-4, 1: wall
+-3, 1: path
+-2, 1: path
+-1, 1: path
+0, 1: path
+1, 1: path
+2, 1: path
+3, 1: path
+4, 1: wall
+5, 1: darkness
+-5, 2: darkness
+-4, 2: wall
+-3, 2: path
+-2, 2: path
+-1, 2: path
+0, 2: Orc Mage on path
+1, 2: path
+2, 2: fountain
+3, 2: path
+4, 2: wall
+5, 2: darkness
+-5, 3: Darkness
+-4, 3: Darkness
+-3, 3: Darkness
+-2, 3: Darkness
+-1, 3: Darkness
+0, 3: Darkness
+1, 3: Darkness
+2, 3: Darkness
+3, 3: Darkness
+4, 3: Darkness
+5, 3: Darkness
+-5, 4: Darkness
+-4, 4: Darkness
+-3, 4: Darkness
+-2, 4: Darkness
+-1, 4: Darkness
+0, 4: Darkness
+1, 4: Darkness
+2, 4: Darkness
+3, 4: Darkness
+4, 4: Darkness
+5, 4: Darkness
+
+Inventory:
+Wood: 22
+Stone: 67
+Coal: 5
+Iron: 1
+Diamond: 0
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 7
+Arrow: 4
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 2
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 6
+Drink: 5
+Energy: 6
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: down
+Light: 0.3040139675140381
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: False
+Is Boss Vulnerable: False

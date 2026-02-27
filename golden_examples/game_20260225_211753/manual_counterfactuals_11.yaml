@@ -1,0 +1,97 @@
+expected_total_variants: 11
+expected_variants_per_step:
+  6: 5
+  240: 1
+  619: 1
+  1065: 1
+  1103: 1
+  1326: 1
+  1456: 1
+
+variants:
+  - step: 6
+    variant_id: step0006_low_health
+    description: Lower health sharply.
+    line_replacements:
+      - from: "Health: 9.0"
+        to: "Health: 2.0"
+
+  - step: 6
+    variant_id: step0006_low_food
+    description: Lower food sharply.
+    line_replacements:
+      - from: "Food: 9"
+        to: "Food: 1"
+
+  - step: 6
+    variant_id: step0006_low_drink
+    description: Lower drink sharply.
+    line_replacements:
+      - from: "Drink: 9"
+        to: "Drink: 1"
+
+  - step: 6
+    variant_id: step0006_low_energy
+    description: Lower energy sharply.
+    line_replacements:
+      - from: "Energy: 9"
+        to: "Energy: 1"
+
+  - step: 6
+    variant_id: step0006_dark_with_mobs
+    description: Make the scene darker and add nearby hostile mobs.
+    line_replacements:
+      - from: "Light: 0.8384429216384888"
+        to: "Light: 0.05"
+    map_add:
+      - "1, 0:Zombie on path"
+      - "0, 1:Skeleton on path"
+
+  - step: 240
+    variant_id: step0240_add_zombie_right
+    description: Add a zombie one tile to the right.
+    map_add:
+      - "1, 0:Zombie on path"
+
+  - step: 619
+    variant_id: step0619_shift_arrow_skeleton_left
+    description: Move arrow and skeleton left to requested target coordinates.
+    map_remove:
+      - "1, 2:Arrow on path"
+      - "1, 3:Skeleton on path"
+    map_add:
+      - "2, 1:Arrow on path"
+      - "3, 0:Skeleton on path"
+
+  - step: 1065
+    variant_id: step1065_no_sword_more_witches
+    description: Remove iron sword from inventory and add witches at specified coordinates.
+    remove_lines:
+      - "Iron Sword with No enchantment"
+    map_add:
+      - "0, -2:Witch on path"
+      - "0, 3:Witch on path"
+      - "-1, -1:Witch on path"
+
+  - step: 1103
+    variant_id: step1103_remove_stone
+    description: Remove the nearby stone block.
+    map_remove:
+      - "-1, 0:stone"
+
+  - step: 1326
+    variant_id: step1326_torch_to_stone
+    description: Replace the torch with a stone block.
+    map_remove:
+      - "0, 1:torch on path"
+    map_add:
+      - "0, 1:stone"
+
+  - step: 1456
+    variant_id: step1456_remove_ladder_close
+    description: Remove ladder tile and set ladder open to false.
+    map_remove:
+      - "-1, 0:ladder_down on path"
+    line_replacements:
+      - from: "Ladder Open: True"
+        to: "Ladder Open: False"

@@ -324,21 +324,17 @@ def infer_fusion_mode(state_dict: Dict[str, torch.Tensor], hidden_dim: int) -> s
 
 def load_model(checkpoint_path: Path, obs_dim: int, device: torch.device) -> ActorCriticAug:
     state_dict = torch.load(checkpoint_path, map_location=device)
-    if "hidden_proj.weight" in state_dict:
+    if "actor_hidden_fc1.weight" in state_dict:
+        hidden_dim = int(state_dict["actor_hidden_fc1.weight"].shape[-1])
+    elif "hidden_proj.weight" in state_dict:
         hidden_dim = int(state_dict["hidden_proj.weight"].shape[-1])
     else:
-        actor_in = int(state_dict["actor_fc1.weight"].shape[1])
-        layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
-        hidden_dim = actor_in - layer_width
-        if hidden_dim <= 0:
-            hidden_dim = HIDDEN_STATE_DIM
-    fusion_mode = infer_fusion_mode(state_dict, hidden_dim=hidden_dim)
+        hidden_dim = HIDDEN_STATE_DIM
     model = ActorCriticAug(
         obs_dim=obs_dim,
         action_dim=ACTION_DIM,
         layer_width=LAYER_WIDTH,
         hidden_state_dim=hidden_dim,
-        fusion_mode=fusion_mode,
     ).to(device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()

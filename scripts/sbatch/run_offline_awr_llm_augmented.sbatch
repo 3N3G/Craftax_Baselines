@@ -58,6 +58,7 @@ export PYTHONUNBUFFERED=1
 
 DATA_DIR="${DATA_DIR:-/data/group_data/rl/geney/vllm_craftax_labelled_results}"
 DATA_GLOB="${DATA_GLOB:-trajectories_batch_*.npz}"
+DEFAULT_DATA_DIR="/data/group_data/rl/geney/vllm_craftax_labelled_results"
 SAVE_DIR="${SAVE_DIR:-/data/group_data/rl/geney/checkpoints/awr_llm_augmented_live/${SLURM_JOB_ID}}"
 TOTAL_STEPS="${TOTAL_STEPS:-100000}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
@@ -70,13 +71,24 @@ NUM_ENVS="${NUM_ENVS:-128}"
 HIDDEN_MODE="${HIDDEN_MODE:-real}"
 HIDDEN_SKIP_N="${HIDDEN_SKIP_N:-1}"
 HIDDEN_SKIP_RESET_ON_DONE="${HIDDEN_SKIP_RESET_ON_DONE:-0}"
-FUSION_MODE="${FUSION_MODE:-residual_gated}"
-HIDDEN_GATE_INIT_LOGIT="${HIDDEN_GATE_INIT_LOGIT:--4.0}"
 ADVANTAGE_MODE="${ADVANTAGE_MODE:-center}"
 MIN_RTG_QUANTILE="${MIN_RTG_QUANTILE:-0.0}"
 NO_WANDB="${NO_WANDB:-0}"
 WANDB_NAME="${WANDB_NAME:-}"
 MAX_DATASET_GB="${MAX_DATASET_GB:-80}"
+DATASET_SHARD_STEPS="${DATASET_SHARD_STEPS:-0}"
+
+if ! compgen -G "${DATA_DIR}/${DATA_GLOB}" > /dev/null; then
+    echo "WARNING: no files matched DATA_DIR='${DATA_DIR}' DATA_GLOB='${DATA_GLOB}'"
+    if [[ "${DATA_DIR}" != "${DEFAULT_DATA_DIR}" ]] && compgen -G "${DEFAULT_DATA_DIR}/${DATA_GLOB}" > /dev/null; then
+        echo "Falling back to default DATA_DIR='${DEFAULT_DATA_DIR}'"
+        DATA_DIR="${DEFAULT_DATA_DIR}"
+    else
+        echo "ERROR: no dataset files found for '${DATA_DIR}/${DATA_GLOB}'"
+        echo "If this is intentional, pass a valid DATA_DIR and DATA_GLOB."
+        exit 1
+    fi
+fi
 
 CMD=(
     python offline_rl/awr_llm_augmented.py
@@ -92,10 +104,9 @@ CMD=(
     --dataset_workers "${DATASET_WORKERS}"
     --num_envs "${NUM_ENVS}"
     --max_dataset_gb "${MAX_DATASET_GB}"
+    --dataset_shard_steps "${DATASET_SHARD_STEPS}"
     --hidden_mode "${HIDDEN_MODE}"
     --hidden_skip_n "${HIDDEN_SKIP_N}"
-    --fusion_mode "${FUSION_MODE}"
-    --hidden_gate_init_logit "${HIDDEN_GATE_INIT_LOGIT}"
     --advantage_mode "${ADVANTAGE_MODE}"
     --min_rtg_quantile "${MIN_RTG_QUANTILE}"
 )
@@ -110,6 +121,10 @@ fi
 
 if [[ "${DISABLE_AUTO_FILE_LIMIT:-0}" == "1" ]]; then
     CMD+=(--disable_auto_file_limit)
+fi
+
+if [[ "${DISABLE_DATASET_SHARD_ROTATION:-0}" == "1" ]]; then
+    CMD+=(--disable_dataset_shard_rotation)
 fi
 
 if [[ "${HIDDEN_SKIP_RESET_ON_DONE}" == "1" ]]; then

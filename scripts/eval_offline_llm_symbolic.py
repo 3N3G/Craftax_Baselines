@@ -142,6 +142,9 @@ def extract_done_episode_achievements(info: Dict, done_mask: np.ndarray) -> Tupl
 
 
 def infer_fusion_mode(state_dict: Dict[str, torch.Tensor], hidden_dim: int) -> str:
+    if "actor_obs_fc1.weight" in state_dict and "actor_hidden_fc1.weight" in state_dict:
+        return "dual_concat"
+
     actor_in = int(state_dict["actor_fc1.weight"].shape[1])
     layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
     if actor_in == layer_width + hidden_dim:
@@ -163,13 +166,27 @@ def load_policy(
 ) -> Tuple[ActorCriticAug, np.ndarray, np.ndarray, Dict]:
     state_dict = torch.load(checkpoint_path, map_location=device)
 
-    obs_dim = int(state_dict["encoder_fc1.weight"].shape[1])
-    layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
-    action_dim = int(state_dict["actor_fc2.weight"].shape[0])
+    if "encoder_fc1.weight" in state_dict:
+        obs_dim = int(state_dict["encoder_fc1.weight"].shape[1])
+        layer_width = int(state_dict["encoder_fc1.weight"].shape[0])
+    elif "actor_obs_fc1.weight" in state_dict:
+        obs_dim = int(state_dict["actor_obs_fc1.weight"].shape[1])
+        layer_width = int(state_dict["actor_obs_fc1.weight"].shape[0])
+    else:
+        raise KeyError("Unable to infer obs/layer dims from checkpoint state_dict")
+
+    if "actor_out.weight" in state_dict:
+        action_dim = int(state_dict["actor_out.weight"].shape[0])
+    elif "actor_fc2.weight" in state_dict:
+        action_dim = int(state_dict["actor_fc2.weight"].shape[0])
+    else:
+        raise KeyError("Unable to infer action_dim from checkpoint state_dict")
 
     inferred_hidden_dim = None
     if "hidden_proj.weight" in state_dict:
         inferred_hidden_dim = int(state_dict["hidden_proj.weight"].shape[1])
+    elif "actor_hidden_fc1.weight" in state_dict:
+        inferred_hidden_dim = int(state_dict["actor_hidden_fc1.weight"].shape[1])
 
     if stats_path is not None and stats_path.exists():
         stats = np.load(stats_path)
@@ -185,13 +202,11 @@ def load_policy(
             "Unable to determine hidden dim. Provide stats file or checkpoint with hidden_proj.weight."
         )
 
-    fusion_mode = infer_fusion_mode(state_dict, hidden_dim=hidden_dim)
     model = ActorCriticAug(
         obs_dim=obs_dim,
         action_dim=action_dim,
         layer_width=layer_width,
         hidden_state_dim=hidden_dim,
-        fusion_mode=fusion_mode,
     ).to(device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -204,7 +219,7 @@ def load_policy(
         "action_dim": action_dim,
         "layer_width": layer_width,
         "hidden_dim": hidden_dim,
-        "fusion_mode": fusion_mode,
+        "fusion_mode": "fixed_dual_branch",
     }
     return model, hidden_mean.astype(np.float32), hidden_std, metadata
 
