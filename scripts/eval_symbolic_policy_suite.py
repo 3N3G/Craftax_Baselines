@@ -30,7 +30,10 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 import wandb
 import yaml
 from flax import serialization
@@ -45,9 +48,10 @@ from craftax.craftax.renderer import render_craftax_pixels  # noqa: E402
 from craftax.craftax_env import make_craftax_env_from_name  # noqa: E402
 from labelling.obs_to_text import obs_to_text  # noqa: E402
 from models.actor_critic import ActorCritic, ActorCriticAug  # noqa: E402
-from offline_rl.awr_llm_augmented import ActorCriticAug as TorchActorCriticAug  # noqa: E402
 from online_rl_llm.online_rl_hidden_jax import LLMHiddenStateManager  # noqa: E402
 from utils.llm_prompts import filter_text_obs  # noqa: E402
+
+TorchActorCriticAug = None  # lazy import; loaded on demand by _load_torch_offline_policy
 from utils.wrappers import AutoResetEnvWrapper, BatchEnvWrapper, LogWrapper  # noqa: E402
 
 try:
@@ -275,6 +279,11 @@ def _load_aug_policy(
 
 
 def _load_torch_offline_policy(checkpoint_path: str, stats_path: Optional[str]):
+    global TorchActorCriticAug
+    if torch is None:
+        raise ImportError("torch is required for torch_offline_aug policy type")
+    if TorchActorCriticAug is None:
+        from offline_rl.awr_llm_augmented import ActorCriticAug as TorchActorCriticAug
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     raw = torch.load(checkpoint_path, map_location=device)
     if isinstance(raw, dict) and "model_state_dict" in raw:
