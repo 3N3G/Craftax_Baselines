@@ -68,3 +68,5 @@ Use this as a minimal, safe reference for local<->Babel development.
   - Keep LLM layer consistent with training data provenance: do not change `llm_layer` in manifests as a shortcut; if training used layer `-1`, eval must use `-1` unless a new model is retrained on layer `24` data.
   - Keep hidden refresh cadence semantics consistent (`skip_n`, reset-on-done behavior) when comparing policies.
   - Before submitting eval waves, explicitly verify each policy entry maps to the correct checkpoint + stats + layer tuple from the corresponding training run metadata.
+- CoT submission reliability rule:
+  - For multi-job CoT waves, launch/verify `scripts/shell/submit_cot_hold_guard.sh` so pending `cot_*` jobs that enter `JobHeldUser` are auto-released during unattended runs.

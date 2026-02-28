@@ -16,6 +16,9 @@ SAVE_TRAJ_ONLINE="${SAVE_TRAJ_ONLINE:-0}"
 TRAJ_SAVE_EVERY_UPDATES="${TRAJ_SAVE_EVERY_UPDATES:-50}"
 TRAJ_FREE_SPACE_MIN_GB="${TRAJ_FREE_SPACE_MIN_GB:-150}"
 TRAJ_SCHEMA="${TRAJ_SCHEMA:-minimal_core}"
+ENABLE_COT_HOLD_GUARD="${ENABLE_COT_HOLD_GUARD:-1}"
+COT_HOLD_GUARD_DAYS="${COT_HOLD_GUARD_DAYS:-8}"
+COT_HOLD_GUARD_POLL_SECONDS="${COT_HOLD_GUARD_POLL_SECONDS:-120}"
 
 TS="$(date +%Y%m%d_%H%M%S)"
 MANIFEST_DIR="analysis/reports"
@@ -103,3 +106,13 @@ SELECTOR_OUT=$(
         "${PROMOTE_TARGET}"
 )
 echo "Submitted selector: ${SELECTOR_OUT}"
+
+if [[ "${ENABLE_COT_HOLD_GUARD}" == "1" ]]; then
+    echo "Ensuring CoT held-job guard is active..."
+    DAYS="${COT_HOLD_GUARD_DAYS}" \
+    POLL_SECONDS="${COT_HOLD_GUARD_POLL_SECONDS}" \
+    JOB_NAME_REGEX="^(cot_s|cot_promote_selector$)" \
+    JOB_NAME="cot_hold_guard" \
+    PARTITION="cpu" \
+    bash scripts/shell/submit_cot_hold_guard.sh
+fi
