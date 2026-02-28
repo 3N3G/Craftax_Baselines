@@ -173,11 +173,12 @@ class TrajectoryWriter:
                         json.dump(marker, f, indent=2, sort_keys=True)
                 except Exception:
                     pass
-        # Keep reminders sparse but visible.
-        if update_idx - self._disable_logged_at_update >= 100:
+        # Keep reminders sparse but visible. Always log the first disable event.
+        if self._disable_logged_at_update < 0 or update_idx - self._disable_logged_at_update >= 100:
             print(
-                f"[trajectory] disabled: {self._disabled_reason} "
-                f"(update={update_idx})",
+                "[trajectory] DISABLED permanently for this run segment: "
+                f"{self._disabled_reason} (update={update_idx}). "
+                "Future trajectory writes will be skipped.",
                 flush=True,
             )
             self._disable_logged_at_update = update_idx
