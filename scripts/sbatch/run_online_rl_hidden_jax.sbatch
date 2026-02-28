@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
 #SBATCH --time=2-00:00:00
-#SBATCH --signal=TERM@300
+#SBATCH --signal=B:TERM@300
 #SBATCH --output=logs/online_rl_hidden_jax_%j.out
 #SBATCH --error=logs/online_rl_hidden_jax_%j.err
 
@@ -228,6 +228,62 @@ choose_vllm_tmp_root() {
     return 1
 }
 
+parse_slurm_timelimit_seconds() {
+    local timelimit="$1"
+    python - "$timelimit" <<'PY'
+import re
+import sys
+
+value = sys.argv[1].strip()
+if not value or value.upper() in {"UNLIMITED", "INFINITE"}:
+    print(0)
+    raise SystemExit(0)
+
+day_match = re.match(r"^(\d+)-(\d+):(\d+):(\d+)$", value)
+if day_match:
+    d, h, m, s = map(int, day_match.groups())
+    print(d * 86400 + h * 3600 + m * 60 + s)
+    raise SystemExit(0)
+
+hms_match = re.match(r"^(\d+):(\d+):(\d+)$", value)
+if hms_match:
+    h, m, s = map(int, hms_match.groups())
+    print(h * 3600 + m * 60 + s)
+    raise SystemExit(0)
+
+ms_match = re.match(r"^(\d+):(\d+)$", value)
+if ms_match:
+    m, s = map(int, ms_match.groups())
+    print(m * 60 + s)
+    raise SystemExit(0)
+
+print(0)
+PY
+}
+
+start_walltime_watchdog() {
+    local grace="${TERM_GRACE_SECONDS:-300}"
+    local timelimit="${SLURM_TIMELIMIT:-}"
+    local total_sec
+    total_sec="$(parse_slurm_timelimit_seconds "${timelimit}")"
+    if [[ -z "${total_sec}" ]] || (( total_sec <= 0 )); then
+        echo "Walltime watchdog: disabled (unknown timelimit: ${timelimit:-<unset>})"
+        return 0
+    fi
+    if (( total_sec <= grace + 30 )); then
+        echo "Walltime watchdog: disabled (timelimit=${timelimit} too short for grace=${grace}s)"
+        return 0
+    fi
+    local fire_in=$((total_sec - grace))
+    (
+        sleep "${fire_in}"
+        echo "Walltime watchdog fired (${grace}s before walltime); requesting graceful shutdown."
+        kill -TERM "$$" 2>/dev/null || true
+    ) &
+    WATCHDOG_PID=$!
+    echo "Walltime watchdog armed: timelimit=${timelimit} grace=${grace}s fire_in=${fire_in}s pid=${WATCHDOG_PID}"
+}
+
 # Parameters
 ENVS=${1:-8}
 TIMESTEPS=${2:-1000000}
@@ -300,8 +356,12 @@ VLLM_PID=""
 TRAIN_PID=""
 TRAIN_RC=1
 TERM_REQUESTED=0
+WATCHDOG_PID=""
 
 cleanup() {
+    if [[ -n "${WATCHDOG_PID}" ]]; then
+        kill "${WATCHDOG_PID}" 2>/dev/null || true
+    fi
     if [[ -n "${VLLM_PID}" ]]; then
         echo "Stopping vLLM server (pid=${VLLM_PID})..."
         kill "${VLLM_PID}" 2>/dev/null || true
@@ -317,6 +377,8 @@ on_term_signal() {
     fi
 }
 trap on_term_signal TERM INT
+
+start_walltime_watchdog
 
 if [[ "${NO_LLM}" != "1" ]]; then
     # Preflight training env before expensive vLLM startup.
@@ -441,12 +503,23 @@ if [[ "${SAVE_TRAJ_ONLINE}" == "1" ]]; then
 fi
 
 echo "Launching training..."
-set +e
-python -u online_rl_llm/online_rl_hidden_jax.py "${PY_ARGS[@]}" &
-TRAIN_PID=$!
-wait "${TRAIN_PID}"
-TRAIN_RC=$?
-set -e
+if [[ "${TERM_REQUESTED}" == "1" ]]; then
+    echo "Termination requested before training launch; skipping python entrypoint."
+    TRAIN_RC=143
+else
+    set +e
+    python -u online_rl_llm/online_rl_hidden_jax.py "${PY_ARGS[@]}" &
+    TRAIN_PID=$!
+    wait "${TRAIN_PID}"
+    TRAIN_RC=$?
+    set -e
+fi
+
+if [[ -n "${WATCHDOG_PID}" ]]; then
+    kill "${WATCHDOG_PID}" 2>/dev/null || true
+    WATCHDOG_PID=""
+fi
+
 echo "Training exit code: ${TRAIN_RC}"
 
 if [[ ${TRAIN_RC} -ne 0 ]]; then
