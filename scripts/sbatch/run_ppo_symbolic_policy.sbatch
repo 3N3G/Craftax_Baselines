@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=2-00:00:00
 
 set -euo pipefail
 
@@ -55,7 +55,7 @@ activate_conda_for "ppo-symbolic" \
     craftax \
     base
 
-TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-1e8}"
+TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-1e10}"
 NUM_ENVS="${NUM_ENVS:-128}"
 NUM_STEPS="${NUM_STEPS:-64}"
 SEED="${SEED:-42}"
