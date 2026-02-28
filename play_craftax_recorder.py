@@ -4,6 +4,8 @@ import time
 import json
 import os
 import datetime
+import hashlib
+import subprocess
 from pathlib import Path
 import pygame
 import jax
@@ -178,7 +180,13 @@ def pygame_input_box(screen, prompt):
 
 
 class GameRecorder:
-    def __init__(self, base_dir="golden_examples"):
+    def __init__(
+        self,
+        base_dir="golden_examples",
+        env_name="Craftax-Symbolic-v1",
+        env_params_digest="unknown",
+        repo_commit="unknown",
+    ):
         self.session_id = datetime.datetime.now().strftime("game_%Y%m%d_%H%M%S")
         self.save_dir = Path(base_dir) / self.session_id
         self.save_dir.mkdir(parents=True, exist_ok=True)
@@ -186,16 +194,46 @@ class GameRecorder:
         self.states_dir.mkdir(exist_ok=True)
         self.images_dir = self.save_dir / "images"
         self.images_dir.mkdir(exist_ok=True)
+        self.bundles_dir = self.save_dir / "bundles"
+        self.bundles_dir.mkdir(exist_ok=True)
         self.log_file = self.save_dir / "examples.jsonl"
+        self.schema_version = "2.0.0"
+        self.env_name = env_name
+        self.env_params_digest = env_params_digest
+        self.repo_commit = repo_commit
         print(f"Recording session to: {self.log_file}")
         print(f"States saved to: {self.states_dir}")
         print(f"Images saved to: {self.images_dir}")
+        print(f"Bundles saved to: {self.bundles_dir}")
+        session_meta = {
+            "schema_version": self.schema_version,
+            "session_id": self.session_id,
+            "created_at": datetime.datetime.now().isoformat(),
+            "env_name": self.env_name,
+            "env_params_digest": self.env_params_digest,
+            "repo_commit": self.repo_commit,
+        }
+        (self.save_dir / "session_metadata.json").write_text(
+            json.dumps(session_meta, indent=2, sort_keys=True)
+        )
         
-    def save_step(self, step_num, before_state_obj, before_state, reasoning, action, after_state):
-        """Save step with text, state object, and pixel render."""
+    def save_step(
+        self,
+        step_num,
+        before_state_obj,
+        after_state_obj,
+        before_state,
+        after_state,
+        before_obs_vec,
+        after_obs_vec,
+        reasoning,
+        action,
+    ):
+        """Save step with text, state objects, symbolic observations, and pixel render."""
+        timestamp = datetime.datetime.now().isoformat()
         # Save text entry to JSONL
         entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": timestamp,
             "step": step_num,
             "reasoning": reasoning,
             "action_id": action,
@@ -218,6 +256,41 @@ class GameRecorder:
         img_path = self.images_dir / f"step_{step_num:04d}.png"
         import imageio
         imageio.imwrite(str(img_path), np.array(pixels, dtype=np.uint8))
+
+        # Save rich per-step bundle for downstream policy/value/OOD evaluation.
+        bundle_dir = self.bundles_dir / f"step_{step_num:04d}"
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        save_compressed_pickle(str(bundle_dir / "state_before.pbz2"), before_state_obj)
+        save_compressed_pickle(str(bundle_dir / "state_after.pbz2"), after_state_obj)
+        np.save(bundle_dir / "obs_before.npy", np.asarray(before_obs_vec, dtype=np.float32))
+        np.save(bundle_dir / "obs_after.npy", np.asarray(after_obs_vec, dtype=np.float32))
+        (bundle_dir / "before_state_raw.txt").write_text(before_state["raw"])
+        (bundle_dir / "before_state_filtered.txt").write_text(before_state["filtered"])
+        (bundle_dir / "after_state_raw.txt").write_text(after_state["raw"])
+        (bundle_dir / "after_state_filtered.txt").write_text(after_state["filtered"])
+        bundle_meta = {
+            "schema_version": self.schema_version,
+            "session_id": self.session_id,
+            "step": int(step_num),
+            "timestamp": timestamp,
+            "action_id": int(action),
+            "action_name": Action(action).name,
+            "reasoning": reasoning,
+            "env_name": self.env_name,
+            "env_params_digest": self.env_params_digest,
+            "repo_commit": self.repo_commit,
+            "paths": {
+                "state_before": "state_before.pbz2",
+                "state_after": "state_after.pbz2",
+                "obs_before": "obs_before.npy",
+                "obs_after": "obs_after.npy",
+                "before_state_raw": "before_state_raw.txt",
+                "before_state_filtered": "before_state_filtered.txt",
+                "after_state_raw": "after_state_raw.txt",
+                "after_state_filtered": "after_state_filtered.txt",
+            },
+        }
+        (bundle_dir / "metadata.json").write_text(json.dumps(bundle_meta, indent=2, sort_keys=True))
         
         print(f"Saved example at step {step_num} (state + image)")
 
@@ -245,6 +318,19 @@ def main(args):
     if args.god_mode:
         env_params = env_params.replace(god_mode=True)
 
+    env_params_digest = hashlib.sha1(str(env_params).encode("utf-8")).hexdigest()
+    try:
+        repo_commit = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            or "unknown"
+        )
+    except Exception:
+        repo_commit = "unknown"
+
     rng = jax.random.PRNGKey(np.random.randint(2**31))
     rng, _rng = jax.random.split(rng)
     obs, env_state = env.reset(_rng, env_params)
@@ -256,7 +342,11 @@ def main(args):
     step_fn = jax.jit(env.step)
     
     # Initialize Recorder components
-    game_recorder = GameRecorder()
+    game_recorder = GameRecorder(
+        env_name="Craftax-Symbolic-v1",
+        env_params_digest=env_params_digest,
+        repo_commit=repo_commit,
+    )
     
     traj_history = {"state": [env_state], "action": [], "reward": [], "done": []}
     
@@ -299,9 +389,11 @@ def main(args):
             # If we have a pending reasoning, this action completes the Example
             before_obs = None
             before_state_obj = None
+            before_obs_vec = None
             if pending_reasoning:
                 before_obs = get_obs_dict(env_state)
                 before_state_obj = env_state  # Save actual state object
+                before_obs_vec = np.asarray(obs, dtype=np.float32).copy()
             
             rng, _rng = jax.random.split(rng)
             old_achievements = env_state.achievements
@@ -313,13 +405,17 @@ def main(args):
             # Handle recording if we just finished an action with pending reasoning
             if pending_reasoning:
                 after_obs = get_obs_dict(env_state)
+                after_obs_vec = np.asarray(obs, dtype=np.float32).copy()
                 game_recorder.save_step(
                     step_count, 
                     before_state_obj,
+                    env_state,
                     before_obs, 
-                    pending_reasoning, 
-                    action, 
-                    after_obs
+                    after_obs,
+                    before_obs_vec,
+                    after_obs_vec,
+                    pending_reasoning,
+                    action,
                 )
                 pending_reasoning = None # Reset
             
