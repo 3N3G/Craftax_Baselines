@@ -764,3 +764,125 @@ Evaluate value function on curated observation states to understand what the LLM
 - Unaugmented offline baseline (`6462652`) reached ~0.62 explained variance at 100k steps. 
 - Evaluated unaugmented baseline using adhoc flags (`6462934`): `mean_return=18.04`, `mean_ach=18.52`.
   - *Key Takeaway*: The unaugmented offline RL stack is working exceptionally well, reaching near-parity with the online PPO baseline (18.04 vs 18.63) purely from offline data.
+
+## 2026-02-28: Previous Stage Recap (No-CoT Hidden Conditioning)
+
+### Setup
+- Policy conditioning setup:
+  - Feed model prompt of observation text.
+  - Condition actor + critic on a middle-layer hidden state.
+  - No generation / immediate hidden-state extraction.
+
+### Evaluation Results (128 episodes; policies trained to 100M unless noted)
+- `skip25`: mean return `17.37`, mean achievements `18.04`
+  - Reached dungeons about `10%` of runs.
+- `skip5` (only 40M steps): mean return `15.7`, mean achievements `16.6`
+- `offline skip25`: mean return `15.01`, mean achievements `15.57`
+- `offline skip5`: mean return `14.85`, mean achievements `15.51`
+- `offline skip1`: mean return `13.23`, mean achievements `13.96`
+- `unaugmented`: mean return `18.63`, mean achievements `19.16`
+
+### Value Function LLM Reliance Test
+- Counterfactual worsening changes (11 total):
+  1. regular state into darker with mobs
+  2. drink from 9 to 1
+  3. energy from 9 to 1
+  4. food from 9 to 1
+  5. health from 9 to 2
+  6. add a zombie to the right while stuck in box
+  7. move skeleton and arrow left by 1
+  8. add three witches and change sword from iron to none
+  9. remove stone block protecting player
+  10. replace torch with stone to force player hit
+  11. remove ladder and set ladder_open=false
+- Over the 9 strictly-worse edits, value decreases:
+  - `online_skip25_final`: `6/9`
+  - `online_skip5_latest`: `6/9`
+  - `offline_dual_skip1`: `2/9`
+  - `offline_dual_skip5`: `0/9`
+  - `offline_dual_skip25`: `4/9`
+- Magnitude was small, indicating weak/low-quality value dependence on LLM hidden input. Also if common sense reasoning was applied in these cases they should all be 9/9. 
+
+### Previous Stage Conclusion
+- Since dungeon reach was non-trivial (`~10%`) and no-CoT hidden extraction appears limited, the next step was to:
+  - train longer (especially unaugmented PPO and skip25),
+  - and test CoT-style hidden extraction variants.
+
+## 2026-02-28: Current Stage — Week-Long Robust Queue Plan (300M + Time-Limit Safe)
+
+### Goal -> Implementation Map
+- Goal: run symbolic PPO well past 100M using full 2-day RL walltime.
+  - Implemented:
+    - `scripts/sbatch/run_ppo_symbolic_policy.sbatch`
+      - `--time=2-00:00:00`
+      - default `TOTAL_TIMESTEPS=1e10` (walltime-limited run)
+      - periodic checkpoint slicing retained.
+
+- Goal: enable arbitrary continuation beyond partition walltime (e.g., 300M targets).
+  - Implemented:
+    - Checkpoint-gated self-resubmitting chain in `scripts/sbatch/run_online_rl_hidden_jax.sbatch`.
+    - New launchers:
+      - `scripts/shell/submit_online_rl_hidden_chain.sh`
+      - `scripts/shell/submit_skip5_skip25_300m_chains.sh`
+    - Chain policy:
+      - successor only if checkpoint step progressed and target not yet reached;
+      - explicit stop when no progress.
+
+- Goal: make continuation robust to time-limit termination.
+  - Implemented:
+    - Slurm signal handling: `#SBATCH --signal=B:TERM@300`.
+    - Bash TERM trap forwarding to Python worker.
+    - Python signal handling in `online_rl_llm/online_rl_hidden_jax.py`:
+      - checkpoint-and-exit at safe boundary.
+    - Watchdog-based pre-stop path in sbatch wrapper for environments where direct timelimit metadata is inconsistent.
+    - Timelimit resolution fallback from `squeue/scontrol` when `SLURM_TIMELIMIT` is unset.
+
+- Goal: save online trajectories directly (remove mandatory PPO->labeling post-process) while avoiding disk-crash failure mode.
+  - Implemented in `online_rl_llm/online_rl_hidden_jax.py`:
+    - `TrajectoryWriter` with optional online writes.
+    - Compact schema:
+      - packed symbolic map bits (`np.packbits`) when binary,
+      - auxiliary obs `float16`,
+      - hidden state `float16`,
+      - action integer, done `uint8`.
+    - Disk guard:
+      - configurable floor (default 150GB),
+      - hard disable latch on low space / ENOSPC,
+      - disable state persisted in checkpoint payload.
+    - Logging behavior improved to always print explicit first disable message and periodic reminders.
+  - Validation evidence:
+    - log shows:
+      - `[trajectory] DISABLED permanently ... free space ... below floor ... Future trajectory writes will be skipped.`
+
+- Goal: run CoT extraction experiments and promote best configs.
+  - Implemented:
+    - Hidden extraction controls in `utils/llm_extractor.py`:
+      - tokens count,
+      - pooling (`last_token`, `mean_last_k`),
+      - pooling window `k`,
+      - generation temperature.
+    - Online trainer CLI wiring for pooling/temperature and trajectory controls.
+    - Stage + promote tooling:
+      - `scripts/shell/submit_cot_stage_then_promote.sh`
+      - `scripts/sbatch/run_cot_promotion_selector.sbatch`
+      - `scripts/select_and_submit_cot_promotions.py`
+    - Stage grid:
+      - `skip {5,25} x tokens {64,256} x pooling {last_token, mean_last_k}`
+      - stage target `60M`, promote top-2 to `300M`.
+
+- Goal: improve scheduler fill/reliability while preserving stability.
+  - Implemented in sbatch/startup scripts:
+    - adjusted RL job resources to single-GPU with reduced CPU/memory request for better packing;
+    - env import preflight before expensive vLLM startup;
+    - safer vLLM temp-root ordering (`SLURM_TMPDIR`/`/scratch` before `/tmp`);
+    - widened vLLM port spacing per job.
+  - Additional reliability fix found during execution:
+    - increased vLLM readiness timeout to avoid false startup failures under heavy concurrent load.
+    - corrected sbatch wrapper to honor exported `CHECKPOINT_DIR`/`RESUME_FROM` (required for real continuation).
+
+### Current Stage Operational Notes
+- Queue orchestration is now built around:
+  - checkpoint-gated chaining,
+  - explicit failure visibility in logs,
+  - and non-destructive path-only syncs to Babel.
+- The current 300M skip5/skip25 and CoT stage queues were re-submitted with the fixed chain wrapper so continuation semantics remain correct over week-long execution.
