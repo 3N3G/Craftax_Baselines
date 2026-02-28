@@ -261,9 +261,30 @@ print(0)
 PY
 }
 
+resolve_slurm_timelimit() {
+    if [[ -n "${SLURM_TIMELIMIT:-}" ]]; then
+        echo "${SLURM_TIMELIMIT}"
+        return 0
+    fi
+
+    local timelimit=""
+    if command -v squeue >/dev/null 2>&1; then
+        timelimit="$(squeue -h -j "${SLURM_JOB_ID}" -o %l 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+    fi
+    if [[ -z "${timelimit}" || "${timelimit}" == "N/A" ]]; then
+        if command -v scontrol >/dev/null 2>&1; then
+            timelimit="$(scontrol show job "${SLURM_JOB_ID}" 2>/dev/null \
+                | tr ' ' '\n' \
+                | awk -F= '$1=="TimeLimit" {print $2; exit}')"
+        fi
+    fi
+    echo "${timelimit}"
+}
+
 start_walltime_watchdog() {
     local grace="${TERM_GRACE_SECONDS:-300}"
-    local timelimit="${SLURM_TIMELIMIT:-}"
+    local timelimit
+    timelimit="$(resolve_slurm_timelimit)"
     local total_sec
     total_sec="$(parse_slurm_timelimit_seconds "${timelimit}")"
     if [[ -z "${total_sec}" ]] || (( total_sec <= 0 )); then
