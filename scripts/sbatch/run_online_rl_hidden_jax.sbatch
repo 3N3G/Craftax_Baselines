@@ -299,6 +299,7 @@ NO_LLM=${NO_LLM:-0}
 RUN_NAME=${RUN_NAME:-}
 VLLM_PORT_BASE=${VLLM_PORT_BASE:-18000}
 VLLM_EXPECTED_MODEL=${VLLM_EXPECTED_MODEL:-./configs/vllm_hidden_qwen4b}
+VLLM_READY_TIMEOUT_SECONDS=${VLLM_READY_TIMEOUT_SECONDS:-3600}
 HIDDEN_POOLING=${HIDDEN_POOLING:-last_token}
 HIDDEN_POOLING_K=${HIDDEN_POOLING_K:-8}
 TEMPERATURE=${TEMPERATURE:-0.7}
@@ -437,8 +438,8 @@ if [[ "${NO_LLM}" != "1" ]]; then
             exit 1
         fi
         sleep 2
-        if [[ ${SECONDS} -gt 1200 ]]; then
-            echo "ERROR: timed out waiting for vLLM server"
+        if [[ ${SECONDS} -gt ${VLLM_READY_TIMEOUT_SECONDS} ]]; then
+            echo "ERROR: timed out waiting for vLLM server after ${VLLM_READY_TIMEOUT_SECONDS}s"
             tail -120 "logs/vllm_server_jax_${SLURM_JOB_ID}.log" || true
             exit 1
         fi
