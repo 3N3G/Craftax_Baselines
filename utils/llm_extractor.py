@@ -383,6 +383,8 @@ class VLLMHiddenStateExtractor:
         num_extracted_layers: int = 4,
         target_layer: int = -1,
         max_workers: int = 16,
+        hidden_pooling: str = "last_token",
+        hidden_pooling_k: int = 8,
     ):
         """
         Args:
@@ -405,6 +407,13 @@ class VLLMHiddenStateExtractor:
         self.num_extracted_layers = num_extracted_layers
         self.target_layer = target_layer
         self.max_workers = max_workers
+        self.hidden_pooling = hidden_pooling
+        self.hidden_pooling_k = max(1, int(hidden_pooling_k))
+        if self.hidden_pooling not in ("last_token", "mean_last_k"):
+            raise ValueError(
+                f"Invalid hidden_pooling={self.hidden_pooling}; expected one of: "
+                "'last_token', 'mean_last_k'"
+            )
 
         # Load tokenizer for prompt formatting (transformers works without torch for tokenizers)
         from transformers import AutoTokenizer
@@ -432,6 +441,9 @@ class VLLMHiddenStateExtractor:
         print(f"  model_name: {model_name}")
         print(f"  hidden_size: {hidden_size}")
         print(f"  target_layer: {target_layer} (of {num_extracted_layers})")
+        print(f"  hidden_pooling: {self.hidden_pooling}")
+        if self.hidden_pooling == "mean_last_k":
+            print(f"  hidden_pooling_k: {self.hidden_pooling_k}")
 
     def _send_request(self, prompt: str, max_tokens: int = 1, temperature: float = 0.0) -> dict:
         """Send a single completion request to the vLLM server with retries."""
@@ -505,8 +517,16 @@ class VLLMHiddenStateExtractor:
                 pass
             return None
 
-        # Select target layer, last token
-        result = hs[self.target_layer, -1, :].astype(np.float32)
+        # Select target layer with configurable pooling.
+        layer_hs = hs[self.target_layer]
+        if layer_hs.ndim != 2:
+            print(f"WARNING: unexpected hidden state shape at {path}: {layer_hs.shape}")
+            result = np.zeros(self.hidden_size, dtype=np.float32)
+        elif self.hidden_pooling == "last_token":
+            result = layer_hs[-1, :].astype(np.float32)
+        else:
+            k = min(self.hidden_pooling_k, layer_hs.shape[0])
+            result = layer_hs[-k:, :].mean(axis=0).astype(np.float32)
 
         # Clean up the file
         try:
@@ -605,6 +625,7 @@ class VLLMHiddenStateExtractor:
         observations: List[str],
         batch_size: int = 8,
         max_new_tokens: int = 256,
+        temperature: float = 0.7,
     ) -> Tuple[np.ndarray, List[str], Dict[str, float]]:
         """
         Generate text and extract hidden states via the vLLM server.
@@ -643,7 +664,7 @@ class VLLMHiddenStateExtractor:
             workers = min(self.max_workers, len(batch_prompts))
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = [
-                    pool.submit(self._send_request, prompt, max_new_tokens, 0.7)
+                    pool.submit(self._send_request, prompt, max_new_tokens, temperature)
                     for prompt in batch_prompts
                 ]
                 results = []
@@ -693,6 +714,8 @@ class VLLMHiddenStateExtractor:
             "llm/total_samples": self.total_samples,
             "llm/total_time_s": self.total_time,
             "llm/tokens_generated": max_new_tokens,
+            "llm/temperature": float(temperature),
+            "llm/hidden_pooling_k": float(self.hidden_pooling_k),
         }
 
         hidden_diag = compute_hidden_state_diagnostics(all_hidden)
