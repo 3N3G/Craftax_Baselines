@@ -5,7 +5,7 @@
 #SBATCH --partition=rl
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --mem=192G
 #SBATCH --time=2-00:00:00
 
 set -euo pipefail
@@ -55,6 +55,23 @@ activate_conda_for "ppo-symbolic" \
     craftax \
     base
 
+python_import_preflight() {
+    python - <<'PY' >/dev/null
+import importlib
+mods = ["jax", "flax", "optax", "distrax", "craftax", "numpy", "wandb"]
+missing = []
+for m in mods:
+    try:
+        importlib.import_module(m)
+    except Exception as exc:
+        missing.append(f"{m}: {exc.__class__.__name__}: {exc}")
+if missing:
+    raise SystemExit("\n".join(missing))
+PY
+}
+
+python_import_preflight
+
 TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-1e10}"
 NUM_ENVS="${NUM_ENVS:-128}"
 NUM_STEPS="${NUM_STEPS:-64}"
@@ -64,6 +81,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-craftax_symbolic_evals}"
 WANDB_ENTITY="${WANDB_ENTITY:-iris-sobolmark}"
 POLICY_SAVE_DIR="${POLICY_SAVE_DIR:-/data/group_data/rl/geney/ppo_symbolic_policies/${RUN_NAME}}"
 SAVE_POLICY_EVERY_STEPS="${SAVE_POLICY_EVERY_STEPS:-25000000}"
+mkdir -p "${POLICY_SAVE_DIR}"
 
 CMD=(
     python -u online_rl/ppo.py

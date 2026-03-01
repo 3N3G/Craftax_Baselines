@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=cot_promote_selector
-#SBATCH --partition=rl
+#SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=01:00:00
@@ -22,8 +22,10 @@ conda activate /data/user_data/geney/.conda/envs/craftax || conda activate craft
 MANIFEST="${1:?manifest path required}"
 TOP_K="${2:-2}"
 PROMOTE_TARGET="${3:-300000000}"
+STAGE_TARGET="${4:-60000000}"
 
 python -u scripts/select_and_submit_cot_promotions.py \
     --manifest "${MANIFEST}" \
     --top-k "${TOP_K}" \
-    --promote-target "${PROMOTE_TARGET}"
+    --promote-target "${PROMOTE_TARGET}" \
+    --stage-target "${STAGE_TARGET}"

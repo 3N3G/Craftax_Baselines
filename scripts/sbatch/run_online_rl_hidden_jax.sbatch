@@ -560,17 +560,34 @@ maybe_submit_successor() {
     latest_step="$(latest_checkpoint_step "${CHAIN_CHECKPOINT_DIR}")"
     echo "Chain checkpoint gate: start=${CHAIN_START_STEP} latest=${latest_step} target=${CHAIN_TARGET_STEPS}"
 
+    local submit_checkpoint_every="${CHECKPOINT_EVERY_STEPS}"
+    local submit_resume_from="${CHAIN_CHECKPOINT_DIR}"
+    local bootstrap_min_ckpt="${CHAIN_BOOTSTRAP_MIN_CHECKPOINT_STEPS:-1000000}"
+
     if [[ -z "${latest_step}" ]]; then
-        echo "CHAIN: no latest checkpoint step detected; stopping chain."
-        return 0
-    fi
-    if (( latest_step <= CHAIN_START_STEP )); then
-        echo "CHAIN: no checkpoint progress in this segment; stopping chain."
-        return 0
+        latest_step=0
     fi
     if (( latest_step >= CHAIN_TARGET_STEPS )); then
         echo "CHAIN: target reached (${latest_step} >= ${CHAIN_TARGET_STEPS}); no successor."
         return 0
+    fi
+    if (( latest_step <= CHAIN_START_STEP )); then
+        # Safety fallback: if walltime/TERM ended a segment before the first checkpoint,
+        # bootstrap one successor with denser checkpointing so future segments become resumable.
+        if [[ "${TERM_REQUESTED}" == "1" ]] && [[ ${TRAIN_RC} -eq 0 ]]; then
+            echo "CHAIN: no checkpoint progress after TERM; bootstrapping successor."
+            if (( submit_checkpoint_every == 0 || submit_checkpoint_every > bootstrap_min_ckpt )); then
+                submit_checkpoint_every="${bootstrap_min_ckpt}"
+            fi
+            if (( latest_step == 0 )) && (( CHAIN_START_STEP == 0 )); then
+                submit_resume_from=""
+            fi
+            local resume_disp="${submit_resume_from:-<none>}"
+            echo "CHAIN: bootstrap params resume_from=${resume_disp} checkpoint_every_steps=${submit_checkpoint_every}"
+        else
+            echo "CHAIN: no checkpoint progress in this segment; stopping chain."
+            return 0
+        fi
     fi
 
     local sbatch_file="scripts/sbatch/run_online_rl_hidden_jax.sbatch"
@@ -579,7 +596,7 @@ maybe_submit_successor() {
         printf "ALL,RUN_NAME=%s,CHECKPOINT_DIR=%s,RESUME_FROM=%s,CHAIN_ENABLED=1,CHAIN_TARGET_STEPS=%s,CHAIN_CHECKPOINT_DIR=%s,CHAIN_RUN_NAME=%s" \
             "${CHAIN_RUN_NAME}" \
             "${CHAIN_CHECKPOINT_DIR}" \
-            "${CHAIN_CHECKPOINT_DIR}" \
+            "${submit_resume_from}" \
             "${CHAIN_TARGET_STEPS}" \
             "${CHAIN_CHECKPOINT_DIR}" \
             "${CHAIN_RUN_NAME}"
@@ -597,7 +614,7 @@ maybe_submit_successor() {
             "${LAYER}" \
             "${TOKENS}" \
             "${NUM_STEPS}" \
-            "${CHECKPOINT_EVERY_STEPS}" \
+            "${submit_checkpoint_every}" \
             "${POLICY_SAVE_DIR}"
     )
     echo "CHAIN: submitted successor => ${submit_out}"

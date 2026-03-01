@@ -56,11 +56,69 @@ def submit_continuation(entry: Dict[str, Any], promote_target: int, job_suffix: 
     return out
 
 
+def active_cot_stage_job_ids() -> List[str]:
+    user = os.environ.get("USER", "")
+    if not user:
+        return []
+    cmd = ["squeue", "-u", user, "-h", "-o", "%i|%j|%T"]
+    try:
+        out = subprocess.check_output(cmd, text=True).strip()
+    except Exception:
+        return []
+    current_job_id = os.environ.get("SLURM_JOB_ID", "")
+    ids: List[str] = []
+    for line in out.splitlines():
+        try:
+            job_id, job_name, state = line.split("|", 2)
+        except ValueError:
+            continue
+        if job_id == current_job_id:
+            continue
+        if not job_name.startswith("cot_s"):
+            continue
+        if state not in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING"}:
+            continue
+        ids.append(job_id)
+    return sorted(set(ids))
+
+
+def submit_selector_retry(
+    *,
+    selector_sbatch: str,
+    manifest: str,
+    top_k: int,
+    promote_target: int,
+    stage_target: int,
+    dependency_ids: List[str],
+) -> str:
+    dep = ":".join(dependency_ids)
+    cmd = [
+        "sbatch",
+        f"--dependency=afterany:{dep}",
+        selector_sbatch,
+        manifest,
+        str(top_k),
+        str(promote_target),
+        str(stage_target),
+    ]
+    return subprocess.check_output(cmd, text=True).strip()
+
+
+def write_report(path: str, payload: Dict[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--top-k", type=int, default=2)
     parser.add_argument("--promote-target", type=int, default=300_000_000)
+    parser.add_argument("--stage-target", type=int, default=0)
+    parser.add_argument(
+        "--selector-sbatch",
+        default="scripts/sbatch/run_cot_promotion_selector.sbatch",
+    )
     parser.add_argument("--report-path", default=None)
     args = parser.parse_args()
 
@@ -85,6 +143,58 @@ def main():
         )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
+    report_path = (
+        args.report_path
+        if args.report_path
+        else str(Path(args.manifest).with_suffix(".promotion_report.json"))
+    )
+
+    if args.stage_target > 0:
+        incomplete = [row for row in scored if row["total_steps"] < args.stage_target]
+        if incomplete:
+            print(
+                f"Stage gate not met: {len(incomplete)} runs below target "
+                f"{args.stage_target} steps."
+            )
+            for row in incomplete:
+                print(f"  pending run={row['run_name']} step={row['total_steps']}")
+
+            dep_ids = active_cot_stage_job_ids()
+            report = {
+                "manifest": args.manifest,
+                "top_k": args.top_k,
+                "promote_target": args.promote_target,
+                "stage_target": args.stage_target,
+                "ranked": scored,
+                "deferred": False,
+                "deferred_dependency_ids": dep_ids,
+                "selected": [],
+                "submissions": [],
+            }
+            if dep_ids:
+                out = submit_selector_retry(
+                    selector_sbatch=args.selector_sbatch,
+                    manifest=args.manifest,
+                    top_k=args.top_k,
+                    promote_target=args.promote_target,
+                    stage_target=args.stage_target,
+                    dependency_ids=dep_ids,
+                )
+                report["deferred"] = True
+                report["deferred_submit_output"] = out
+                print(f"Deferred selector until stage gate is met: {out}")
+                write_report(report_path, report)
+                print(f"Wrote promotion report: {report_path}")
+                return
+
+            report["error"] = (
+                "Stage target not reached and no active cot_s jobs found. "
+                "Refusing to promote from incomplete stage."
+            )
+            write_report(report_path, report)
+            print(f"Wrote promotion report: {report_path}")
+            raise SystemExit(2)
+
     selected = [s for s in scored if s["score"] != float("-inf")][: args.top_k]
     print("Selector ranking:")
     for idx, row in enumerate(scored, start=1):
@@ -103,17 +213,12 @@ def main():
         "manifest": args.manifest,
         "top_k": args.top_k,
         "promote_target": args.promote_target,
+        "stage_target": args.stage_target,
         "ranked": scored,
         "selected": selected,
         "submissions": submit_logs,
     }
-    report_path = (
-        args.report_path
-        if args.report_path
-        else str(Path(args.manifest).with_suffix(".promotion_report.json"))
-    )
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, sort_keys=True)
+    write_report(report_path, report)
     print(f"Wrote promotion report: {report_path}")
 
 
