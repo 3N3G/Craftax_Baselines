@@ -16,7 +16,7 @@ except ImportError:
     torch = None
     TORCH_AVAILABLE = False
 
-from utils.llm_prompts import create_prompt, create_chat_messages, SYSTEM_PROMPT
+from utils.llm_prompts import create_prompt, get_generation_prefix, get_system_prompt
 
 # Default Configuration
 DEFAULT_MODEL_ID = "Qwen/Qwen3-4B-Thinking-2507"
@@ -92,6 +92,8 @@ class LLMHiddenStateExtractor:
         model_id: str = DEFAULT_MODEL_ID,
         tokens_generated: int = TOKENS_GENERATED,
         device: str = None,
+        prompt_variant: str = "default",
+        system_prompt: Optional[str] = None,
     ):
         if not TORCH_AVAILABLE:
             raise ImportError(
@@ -105,6 +107,11 @@ class LLMHiddenStateExtractor:
         self.model_id = model_id
         self.tokens_generated = tokens_generated
         self.device = device
+        self.prompt_variant = (prompt_variant or "default").strip().lower()
+        self.system_prompt = (
+            get_system_prompt(self.prompt_variant) if system_prompt is None else system_prompt
+        )
+        self.generation_prefix = get_generation_prefix(self.prompt_variant)
         
         print(f"Loading tokenizer: {model_id}")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -139,6 +146,8 @@ class LLMHiddenStateExtractor:
         self.total_samples = 0
         self.total_time = 0.0
         self.batch_times = []
+        self._missing_path_count = 0
+        self._zero_vector_fallback_count = 0
     
     def extract_hidden_states(
         self, 
@@ -169,7 +178,17 @@ class LLMHiddenStateExtractor:
         for batch_idx in range(0, len(observations), batch_size):
             batch_start = time.perf_counter()
             batch_obs = observations[batch_idx:batch_idx + batch_size]
-            prompts = [create_prompt(obs, self.tokenizer) for obs in batch_obs]
+            prompts = [
+                create_prompt(
+                    obs,
+                    self.tokenizer,
+                    system_prompt=self.system_prompt,
+                    prompt_variant=self.prompt_variant,
+                )
+                for obs in batch_obs
+            ]
+            if self.generation_prefix:
+                prompts = [p + self.generation_prefix for p in prompts]
             
             inputs = self.tokenizer(
                 prompts,
@@ -304,7 +323,15 @@ class LLMHiddenStateExtractor:
         for batch_idx in range(0, len(observations), batch_size):
             batch_start = time.perf_counter()
             batch_obs = observations[batch_idx:batch_idx + batch_size]
-            prompts = [create_prompt(obs, self.tokenizer) for obs in batch_obs]
+            prompts = [
+                create_prompt(
+                    obs,
+                    self.tokenizer,
+                    system_prompt=self.system_prompt,
+                    prompt_variant=self.prompt_variant,
+                )
+                for obs in batch_obs
+            ]
             
             inputs = self.tokenizer(
                 prompts,
@@ -385,6 +412,8 @@ class VLLMHiddenStateExtractor:
         max_workers: int = 16,
         hidden_pooling: str = "last_token",
         hidden_pooling_k: int = 8,
+        prompt_variant: str = "default",
+        system_prompt: Optional[str] = None,
     ):
         """
         Args:
@@ -409,6 +438,11 @@ class VLLMHiddenStateExtractor:
         self.max_workers = max_workers
         self.hidden_pooling = hidden_pooling
         self.hidden_pooling_k = max(1, int(hidden_pooling_k))
+        self.prompt_variant = (prompt_variant or "default").strip().lower()
+        self.system_prompt = (
+            get_system_prompt(self.prompt_variant) if system_prompt is None else system_prompt
+        )
+        self.generation_prefix = get_generation_prefix(self.prompt_variant)
         if self.hidden_pooling not in ("last_token", "mean_last_k"):
             raise ValueError(
                 f"Invalid hidden_pooling={self.hidden_pooling}; expected one of: "
@@ -470,7 +504,7 @@ class VLLMHiddenStateExtractor:
         raise RuntimeError(f"vLLM request failed after retries: {last_error}") from last_error
 
     def _get_hidden_state_path(self, result: dict) -> Optional[str]:
-        """Extract hidden states file path from response."""
+        """Extract hidden-states file path from response with completion-id fallback."""
         # Check in choices
         for choice in result.get("choices", []):
             kv_params = choice.get("kv_transfer_params", {})
@@ -480,18 +514,36 @@ class VLLMHiddenStateExtractor:
         kv_params = result.get("kv_transfer_params", {})
         if kv_params and kv_params.get("hidden_states_path"):
             return kv_params["hidden_states_path"]
+
+        # Some vLLM responses may omit kv_transfer_params while still writing the
+        # hidden-state file. Fall back to completion-id pattern lookup.
+        completion_id = result.get("id")
+        if completion_id:
+            pattern = os.path.join(self.hidden_states_path, f"{completion_id}-*.safetensors")
+            for attempt in range(5):
+                matches = glob.glob(pattern)
+                if matches:
+                    return max(matches, key=os.path.getmtime)
+                time.sleep(0.05 * (attempt + 1))
         return None
 
     def _load_hidden_state(self, path: str) -> Optional[np.ndarray]:
         """Load hidden state from safetensors file and return target layer."""
         from safetensors import safe_open
 
-        if not path or not os.path.exists(path):
+        if not path:
             return None
+        if not os.path.exists(path):
+            for attempt in range(8):
+                time.sleep(0.05 * (attempt + 1))
+                if os.path.exists(path):
+                    break
+            else:
+                return None
 
         hs = None
         last_error = None
-        for _ in range(3):
+        for attempt in range(10):
             try:
                 if TORCH_AVAILABLE:
                     # Prefer pt loader: robust for bfloat16 tensors.
@@ -504,10 +556,10 @@ class VLLMHiddenStateExtractor:
             except (OSError, EOFError, ValueError) as exc:
                 # Handles stale file handle/truncated write races from shared FS.
                 last_error = exc
-                time.sleep(0.1)
+                time.sleep(0.05 * (attempt + 1))
             except Exception as exc:
                 last_error = exc
-                time.sleep(0.1)
+                time.sleep(0.05 * (attempt + 1))
 
         if hs is None:
             print(f"WARNING: Failed to load hidden state from {path}: {last_error}")
@@ -563,7 +615,15 @@ class VLLMHiddenStateExtractor:
         start_time = time.perf_counter()
         
         # Format prompts using the tokenizer chat template
-        prompts = [create_prompt(obs, self.tokenizer) for obs in observations]
+        prompts = [
+            create_prompt(
+                obs,
+                self.tokenizer,
+                system_prompt=self.system_prompt,
+                prompt_variant=self.prompt_variant,
+            )
+            for obs in observations
+        ]
 
         all_hidden = []
         batch_latencies = []
@@ -590,12 +650,31 @@ class VLLMHiddenStateExtractor:
                     all_hidden.append(np.zeros(self.hidden_size, dtype=np.float32))
                     continue
                 hs_path = self._get_hidden_state_path(result)
+                if hs_path is None:
+                    self._missing_path_count += 1
+                    if self._missing_path_count <= 5 or self._missing_path_count % 100 == 0:
+                        completion_id = result.get("id", "<unknown>")
+                        finish_reason = None
+                        if result.get("choices"):
+                            finish_reason = result["choices"][0].get("finish_reason")
+                        print(
+                            "WARNING: hidden_states_path missing "
+                            f"(id={completion_id}, finish_reason={finish_reason})"
+                        )
                 hs = self._load_hidden_state(hs_path)
                 if hs is not None:
                     all_hidden.append(hs)
                 else:
                     # Fallback: zero vector (shouldn't happen in normal operation)
-                    print(f"WARNING: Failed to load hidden state, using zero vector")
+                    self._zero_vector_fallback_count += 1
+                    if (
+                        self._zero_vector_fallback_count <= 10
+                        or self._zero_vector_fallback_count % 100 == 0
+                    ):
+                        print(
+                            "WARNING: Failed to load hidden state, using zero vector "
+                            f"(count={self._zero_vector_fallback_count})"
+                        )
                     all_hidden.append(np.zeros(self.hidden_size, dtype=np.float32))
 
             batch_latencies.append(time.perf_counter() - batch_t0)
@@ -650,7 +729,17 @@ class VLLMHiddenStateExtractor:
         start_time = time.perf_counter()
 
         # Format prompts using the tokenizer chat template
-        prompts = [create_prompt(obs, self.tokenizer) for obs in observations]
+        prompts = [
+            create_prompt(
+                obs,
+                self.tokenizer,
+                system_prompt=self.system_prompt,
+                prompt_variant=self.prompt_variant,
+            )
+            for obs in observations
+        ]
+        if self.generation_prefix:
+            prompts = [p + self.generation_prefix for p in prompts]
 
         all_hidden = []
         all_texts = []
@@ -683,12 +772,31 @@ class VLLMHiddenStateExtractor:
                     continue
                 # Get hidden state
                 hs_path = self._get_hidden_state_path(result)
+                if hs_path is None:
+                    self._missing_path_count += 1
+                    if self._missing_path_count <= 5 or self._missing_path_count % 100 == 0:
+                        completion_id = result.get("id", "<unknown>")
+                        finish_reason = None
+                        if result.get("choices"):
+                            finish_reason = result["choices"][0].get("finish_reason")
+                        print(
+                            "WARNING: hidden_states_path missing "
+                            f"(id={completion_id}, finish_reason={finish_reason})"
+                        )
                 hs = self._load_hidden_state(hs_path)
                 if hs is not None:
                     all_hidden.append(hs)
                 else:
                     # Fallback: zero vector (shouldn't happen in normal operation)
-                    print(f"WARNING: Failed to load hidden state, using zero vector")
+                    self._zero_vector_fallback_count += 1
+                    if (
+                        self._zero_vector_fallback_count <= 10
+                        or self._zero_vector_fallback_count % 100 == 0
+                    ):
+                        print(
+                            "WARNING: Failed to load hidden state, using zero vector "
+                            f"(count={self._zero_vector_fallback_count})"
+                        )
                     all_hidden.append(np.zeros(self.hidden_size, dtype=np.float32))
 
                 # Get generated text

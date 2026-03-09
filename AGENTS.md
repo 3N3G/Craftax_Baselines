@@ -68,5 +68,9 @@ Use this as a minimal, safe reference for local<->Babel development.
   - Keep LLM layer consistent with training data provenance: do not change `llm_layer` in manifests as a shortcut; if training used layer `-1`, eval must use `-1` unless a new model is retrained on layer `24` data.
   - Keep hidden refresh cadence semantics consistent (`skip_n`, reset-on-done behavior) when comparing policies.
   - Before submitting eval waves, explicitly verify each policy entry maps to the correct checkpoint + stats + layer tuple from the corresponding training run metadata.
+- vLLM hidden-state extraction reliability rule:
+  - Do not assume `/v1/completions` always returns `kv_transfer_params.hidden_states_path`; some responses can omit it while still writing the `.safetensors` file.
+  - Extractors must include a completion-id (`result["id"]`) filename fallback and short file-availability retry before zero-vector fallback.
+  - If `Failed to load hidden state` appears, inspect the actual JSON response shape first and verify hidden-state file creation on the compute node before changing prompts.
 - CoT submission reliability rule:
   - For multi-job CoT waves, launch/verify `scripts/shell/submit_cot_hold_guard.sh` so pending `cot_*` jobs that enter `JobHeldUser` are auto-released during unattended runs.
