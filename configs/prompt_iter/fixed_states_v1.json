@@ -1,0 +1,87 @@
+{
+  "version": "v1",
+  "created_at": "2026-03-10",
+  "description": "Deterministic fixed prompt-iteration set: 5 golden bundle states + 5 trajectory states.",
+  "states": [
+    {
+      "id": "golden_step_0006",
+      "label": "Golden step_0006",
+      "source_kind": "golden_bundle",
+      "source_path": "golden_examples/game_20260225_211753/bundles/step_0006",
+      "obs_variant": "before",
+      "tags": ["golden", "overworld", "early_resource"]
+    },
+    {
+      "id": "golden_step_0240",
+      "label": "Golden step_0240",
+      "source_kind": "golden_bundle",
+      "source_path": "golden_examples/game_20260225_211753/bundles/step_0240",
+      "obs_variant": "before",
+      "tags": ["golden", "combat_pressure", "mid_episode"]
+    },
+    {
+      "id": "golden_step_0619",
+      "label": "Golden step_0619",
+      "source_kind": "golden_bundle",
+      "source_path": "golden_examples/game_20260225_211753/bundles/step_0619",
+      "obs_variant": "before",
+      "tags": ["golden", "routing", "progression"]
+    },
+    {
+      "id": "golden_step_1103",
+      "label": "Golden step_1103",
+      "source_kind": "golden_bundle",
+      "source_path": "golden_examples/game_20260225_211753/bundles/step_1103",
+      "obs_variant": "before",
+      "tags": ["golden", "dungeon", "threat_handling"]
+    },
+    {
+      "id": "golden_step_1456",
+      "label": "Golden step_1456",
+      "source_kind": "golden_bundle",
+      "source_path": "golden_examples/game_20260225_211753/bundles/step_1456",
+      "obs_variant": "before",
+      "tags": ["golden", "late_episode", "resource_management"]
+    },
+    {
+      "id": "traj_20260310_134702_t0000",
+      "label": "Trajectory t=0",
+      "source_kind": "trajectory_jsonl",
+      "source_path": "play_data/trajectory_records/traj_20260310_134702/text_obs.jsonl",
+      "t": 0,
+      "tags": ["trajectory", "spawn", "overworld"]
+    },
+    {
+      "id": "traj_20260310_134702_t0155",
+      "label": "Trajectory t=155",
+      "source_kind": "trajectory_jsonl",
+      "source_path": "play_data/trajectory_records/traj_20260310_134702/text_obs.jsonl",
+      "t": 155,
+      "tags": ["trajectory", "mixed_terrain", "enemy_visible"]
+    },
+    {
+      "id": "traj_20260310_134702_t0240",
+      "label": "Trajectory t=240",
+      "source_kind": "trajectory_jsonl",
+      "source_path": "play_data/trajectory_records/traj_20260310_134702/text_obs.jsonl",
+      "t": 240,
+      "tags": ["trajectory", "ladder_context", "low_intrinsics"]
+    },
+    {
+      "id": "traj_20260310_134702_t0425",
+      "label": "Trajectory t=425",
+      "source_kind": "trajectory_jsonl",
+      "source_path": "play_data/trajectory_records/traj_20260310_134702/text_obs.jsonl",
+      "t": 425,
+      "tags": ["trajectory", "floor1", "dungeon_visibility"]
+    },
+    {
+      "id": "traj_20260310_134702_t0567",
+      "label": "Trajectory t=567",
+      "source_kind": "trajectory_jsonl",
+      "source_path": "play_data/trajectory_records/traj_20260310_134702/text_obs.jsonl",
+      "t": 567,
+      "tags": ["trajectory", "sleeping_state", "late_episode"]
+    }
+  ]
+}

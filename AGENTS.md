@@ -2,11 +2,19 @@
 
 Use this as a minimal, safe reference for local<->Babel development.
 
+## 0) Codex Continuity
+- For active experiment status/handoff context before submitting new jobs, read:
+  - `docs/CODEX_AGENT_HANDOFF.md`
+
 ## 1) Canonical Command Pattern
 - Run remote commands through:
   - `zsh -lic 'ssh babel "<remote-cmd>"'`
 - Run local helper commands through:
   - `zsh -lic 'cd /Users/gene/Documents/Craftax_Baselines && <local-cmd>'`
+- Execution location rule:
+  - Local Craftax (for example via `imaug`) is inspection-only (package/source checks, import/introspection, static verification).
+  - All actual code execution for this repo (evals, training, rollouts, sbatch entrypoints, python scripts that run environments) must be run on Babel.
+  - If uncertain, default to Babel.
 
 ## 2) Sync Rules (Explicit Paths Only)
 - Use targeted sync via helper:
@@ -22,6 +30,7 @@ Use this as a minimal, safe reference for local<->Babel development.
 - Do not use `push --all --delete`.
 - Do not use raw `rsync` against `~/Craftax_Baselines`.
 - Keep diagnostics: do not delete `~/Craftax_Baselines/logs` contents EVER unless explicitly requested.
+- Do not run Craftax experiments locally; local machine usage is limited to inspection and file editing.
 
 ## 4) Slurm Basics
 - Queue view:
@@ -42,12 +51,17 @@ Use this as a minimal, safe reference for local<->Babel development.
 
 ## 6) Sbatch Authoring Guardrails
 - Before writing or changing an sbatch script, inspect at least 2 existing working sbatch scripts for the same workflow family and copy their env/bootstrap patterns.
-- Never assume env names are valid on every node/session; use absolute env paths first, then fallbacks.
+- Never assume env names are valid on every node/session; pin one explicit absolute env path per workflow and fail fast if it cannot be activated.
 - For eval/training entrypoints, verify env correctness with a python import preflight for required modules before launching the main command.
 - Preflight must include workflow-specific runtime deps (for policy eval this includes `distrax` and model-import deps), not just generic libs.
 - Run eval-env preflight before expensive service startup (like vLLM) so bad envs fail fast without burning GPU startup time.
 - Prefer a single known-good env for both vLLM + eval when possible (to avoid CUDA/torch ABI mismatch across envs on RL nodes).
 - If multiple envs are candidates (`craftax_fast_llm`, `test`, etc.), pick the one proven stable on the target partition/node type, not just any node.
+- In sbatch scripts, avoid candidate env lists and `conda activate ... || ...` chains; expose a single `<WORKFLOW>_ENV_PATH` override variable with a deterministic default.
+- Default W&B routing:
+  - eval jobs -> `craftax_symbolic_evals`
+  - unaugmented symbolic PPO training -> `unaugmented_craftax_ppo`
+  - only override these defaults when the user explicitly requests a different project.
 - For cross-node eval jobs, avoid defaulting to envs with known node-specific CUDA ABI issues (`test`); prefer the stable eval env (`imaug`) unless logs prove otherwise.
 - Do not default heavy vLLM temp artifacts to `/tmp`; prefer `${SLURM_TMPDIR}`/`/scratch` and only fall back to `/tmp` if creation succeeds.
 - If vLLM jobs can run in parallel, isolate each job with:
@@ -61,6 +75,14 @@ Use this as a minimal, safe reference for local<->Babel development.
   - add a reusable prevention rule to this file (`AGENTS.md`)
   - apply the fix and only then resubmit jobs.
 - Treat each correction as a general principle, not a one-off patch.
+- Remote shell quoting reliability rule:
+  - For complex remote loops/heredocs (especially with `*`, `$()`, or jq filters), run via `ssh babel "bash -s"` with a single-quoted heredoc (`<<'EOF' ... EOF`) to avoid local zsh globbing/substitution.
+  - Inside double-quoted remote strings, escape remote-only variables as `\$var`/`\${var}` so they are expanded on Babel, not locally.
+  - Do not rely on unescaped globs in outer `zsh -lic` strings; if command complexity grows, move logic into a checked script and call it remotely.
+- Long-run PPO checkpoint reliability rule:
+  - Do not invoke `jax.experimental.io_callback` with full policy params every update just to test save cadence; gate callback execution so params are transferred only when a save is actually due.
+  - Periodic checkpoint triggers must use interval-crossing semantics (prev_step//N < curr_step//N), not exact modulo equality, because PPO update stride (`NUM_STEPS*NUM_ENVS`) often does not divide desired save intervals.
+  - For very long continuation runs, default periodic policy saves to off (`SAVE_POLICY_EVERY_STEPS=0`) unless intermediate checkpoints are explicitly needed.
 - When loading `ActorCriticAug` checkpoints, infer `action_dim` from the final action head (`actor_out`) first; never infer it from intermediate actor MLP layers when `actor_out` exists.
 - Training/eval consistency rule for hidden-state policies:
   - Always evaluate a checkpoint with the same policy family and architecture it was trained with (e.g. `ActorCriticAug` vs JAX actor-critic, fusion mode, hidden dim, layer width, actor/critic head depth).
@@ -74,3 +96,10 @@ Use this as a minimal, safe reference for local<->Babel development.
   - If `Failed to load hidden state` appears, inspect the actual JSON response shape first and verify hidden-state file creation on the compute node before changing prompts.
 - CoT submission reliability rule:
   - For multi-job CoT waves, launch/verify `scripts/shell/submit_cot_hold_guard.sh` so pending `cot_*` jobs that enter `JobHeldUser` are auto-released during unattended runs.
+- Text-observation coordinate integrity rule:
+  - Never parse `Map:` entries with naive comma splitting; split entries by coordinate anchors (`-?\d+,\s*-?\d+\s*:`) so row/col pairs cannot be separated.
+  - Any emitted `Map (interesting tiles only)` line must validate as repeated `row,col:tile` tokens; malformed tokens like `-5:tree` are fatal in online RL prompt paths.
+  - If filtering/parsing fails in non-training tools, preserve original map text rather than emitting partially corrupted coordinates.
+- RL node env-path reliability rule:
+  - Before launching `run_online_rl_hidden_jax.sbatch`, ensure `TRAIN_ENV_PATH`/`VLLM_ENV_PATH` exist on the target node family; some RL nodes can miss `/data/user_data/geney/.conda/envs/*` even when others have it.
+  - If a segment fails at `training env import preflight`, rerun on a node family with known-good env mounts (or set explicit existing env paths) before resubmitting the chain.
