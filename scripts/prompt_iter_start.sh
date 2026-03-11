@@ -4,9 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+# Source bashrc defensively (same pattern used in sbatch scripts).
+set +e
 set +u
+set +o pipefail
 source ~/.bashrc
+BASHRC_RC=$?
+set -e
 set -u
+set -o pipefail
+if [[ ${BASHRC_RC} -ne 0 ]]; then
+  echo "WARNING: source ~/.bashrc exited with code ${BASHRC_RC}; continuing"
+fi
 
 PROMPT_ITER_ENV_PATH="${PROMPT_ITER_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
 PROMPT_ITER_VLLM_URL="${PROMPT_ITER_VLLM_URL:-http://127.0.0.1:8000}"
@@ -16,6 +25,11 @@ PROMPT_ITER_PORT="${PROMPT_ITER_PORT:-8501}"
 
 if [[ ! -d "${PROMPT_ITER_ENV_PATH}" ]]; then
   echo "ERROR: prompt-iter env path does not exist: ${PROMPT_ITER_ENV_PATH}" >&2
+  exit 1
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+  echo "ERROR: conda command not found after shell initialization" >&2
   exit 1
 fi
 
