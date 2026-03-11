@@ -25,6 +25,9 @@ PROMPT_ITER_PORT="${PROMPT_ITER_PORT:-8501}"
 
 if [[ ! -d "${PROMPT_ITER_ENV_PATH}" ]]; then
   echo "ERROR: prompt-iter env path does not exist: ${PROMPT_ITER_ENV_PATH}" >&2
+  echo "This path is usually mounted only on compute nodes." >&2
+  echo "Run this script via an active allocation, e.g.:" >&2
+  echo "  srun --jobid=<running_jobid> --overlap --ntasks=1 --cpus-per-task=2 bash -lc 'cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=${PROMPT_ITER_ENV_PATH} PROMPT_ITER_VLLM_URL=${PROMPT_ITER_VLLM_URL} scripts/prompt_iter_start.sh'" >&2
   exit 1
 fi
 

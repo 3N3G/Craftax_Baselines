@@ -12,6 +12,13 @@ Use SSH local port-forwarding:
 - Local side: `ssh -L <local_port>:127.0.0.1:<remote_port> babel`
 - Browser side: open `http://127.0.0.1:<local_port>` on your laptop
 
+## Compute Node Requirement
+If you use `/data/user_data/geney/.conda/envs/craftax_fast_llm` and a node-local vLLM endpoint, run the webapp on a compute node (not Babel login).
+
+Best practice: run it inside an existing Slurm job allocation with `srun --jobid <id> --overlap` so:
+- the `/data` env path exists,
+- the webapp can reach vLLM on `127.0.0.1:<vllm_port>` on that same node.
+
 ## Files
 - `configs/prompt_iter/fixed_states_v1.json`
 - `scripts/prompt_iter_backend.py`
@@ -33,20 +40,31 @@ If coordinate formatting is malformed, loading fails early.
 ### Quickstart (Two Terminals)
 Terminal A (keep running):
 ```bash
-zsh -lic 'ssh babel "cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=/data/user_data/geney/.conda/envs/craftax_fast_llm PROMPT_ITER_VLLM_URL=http://127.0.0.1:8000 scripts/prompt_iter_start.sh"'
+zsh -lic 'ssh babel "srun --jobid=<running_jobid> --overlap --ntasks=1 --cpus-per-task=2 bash -lc '\''cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=/data/user_data/geney/.conda/envs/craftax_fast_llm PROMPT_ITER_VLLM_URL=http://127.0.0.1:<job_vllm_port> PROMPT_ITER_PORT=8501 scripts/prompt_iter_start.sh'\''"'
 ```
 
 Terminal B (local tunnel):
 ```bash
-zsh -lic 'ssh -N -L 8501:127.0.0.1:8501 babel'
+zsh -lic 'ssh -N -L 8501:<compute_node_hostname>:8501 babel'
 ```
 
 Then open locally:
 `http://127.0.0.1:8501`
 
+### Discover Job Node + Port
+Get node for your running job:
+```bash
+zsh -lic 'ssh babel "squeue -j <running_jobid> -h -o \"%N\""'
+```
+
+Find vLLM port from log:
+```bash
+zsh -lic 'cd /Users/gene/Documents/Craftax_Baselines && scripts/shell/babel.sh logs <running_jobid> && rg -n "Using VLLM_URL=" logs/online_rl_hidden_jax_<running_jobid>.out'
+```
+
 ### 1) Start Streamlit on Babel
 ```bash
-zsh -lic 'ssh babel "cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=/data/user_data/geney/.conda/envs/craftax_fast_llm PROMPT_ITER_VLLM_URL=http://127.0.0.1:8000 scripts/prompt_iter_start.sh"'
+zsh -lic 'ssh babel "srun --jobid=<running_jobid> --overlap --ntasks=1 --cpus-per-task=2 bash -lc '\''cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=/data/user_data/geney/.conda/envs/craftax_fast_llm PROMPT_ITER_VLLM_URL=http://127.0.0.1:<job_vllm_port> PROMPT_ITER_PORT=8501 scripts/prompt_iter_start.sh'\''"'
 ```
 
 If `streamlit` is missing:
@@ -57,6 +75,7 @@ zsh -lic 'ssh babel "source ~/.bashrc && conda activate /data/user_data/geney/.c
 Notes:
 - `scripts/prompt_iter_start.sh` activates `PROMPT_ITER_ENV_PATH`, checks `requests` + `streamlit`, and verifies `PROMPT_ITER_VLLM_URL/health` before launch.
 - In the app, `Prefer /v1/chat/completions` is enabled by default so single/batch runs still work when local `transformers` is unavailable.
+- If you launch on login node without `/data` mounts, the script will fail fast and print an `srun --jobid ... --overlap` example.
 
 ### 2) Port-forward locally
 ```bash
