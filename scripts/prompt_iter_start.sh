@@ -30,6 +30,10 @@ else
   PROMPT_ITER_HOST="127.0.0.1"
 fi
 PROMPT_ITER_PORT="${PROMPT_ITER_PORT:-8501}"
+export PROMPT_ITER_VLLM_URL
+export PROMPT_ITER_HOST
+export PROMPT_ITER_PORT
+export PROMPT_ITER_ENV_PATH
 
 if [[ ! -d "${PROMPT_ITER_ENV_PATH}" ]]; then
   echo "ERROR: prompt-iter env path does not exist: ${PROMPT_ITER_ENV_PATH}" >&2

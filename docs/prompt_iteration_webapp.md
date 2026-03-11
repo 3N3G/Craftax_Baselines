@@ -76,6 +76,7 @@ zsh -lic 'ssh babel "source ~/.bashrc && conda activate /data/user_data/geney/.c
 Notes:
 - `scripts/prompt_iter_start.sh` activates `PROMPT_ITER_ENV_PATH`, checks `requests` + `streamlit`, and verifies `PROMPT_ITER_VLLM_URL/health` before launch.
 - In Slurm/compute runs, launcher defaults to `PROMPT_ITER_HOST=0.0.0.0`, so `ssh -L ...:<compute_node>:8501 babel` works.
+- The webapp now picks up `PROMPT_ITER_VLLM_URL` as its default runtime URL, so the sidebar does not reset to `:8000` when you launched with a non-default vLLM port.
 - In the app, `Prefer /v1/chat/completions` is enabled by default so single/batch runs still work when local `transformers` is unavailable.
 - If you launch on login node without `/data` mounts, the script will fail fast and print an `srun --jobid ... --overlap` example.
 
