@@ -41,6 +41,8 @@ def _init_defaults() -> None:
         st.session_state["history"] = []
     if "notes" not in st.session_state:
         st.session_state["notes"] = ""
+    if "prefer_chat_completions" not in st.session_state:
+        st.session_state["prefer_chat_completions"] = True
 
 
 def _set_sections_from_variant(variant: str) -> None:
@@ -85,7 +87,8 @@ def _append_history(mode: str, result_payload) -> None:
 
 def _render_result(result: dict) -> None:
     st.markdown(f"### Result: {result['label']} (`{result['state_id']}`)")
-    st.write(f"Latency: {result['latency_s']:.2f}s")
+    mode = result.get("request_mode", "unknown")
+    st.write(f"Latency: {result['latency_s']:.2f}s | Request mode: `{mode}`")
 
     tabs = st.tabs(["State", "Prompt", "Response", "Raw JSON"])
     with tabs[0]:
@@ -142,6 +145,19 @@ def main() -> None:
         st.text_input("Tokenizer model id", key="model_id")
         st.number_input("Max new tokens", min_value=1, max_value=2048, key="max_tokens")
         st.number_input("Temperature", min_value=0.0, max_value=2.0, step=0.05, key="temperature")
+        st.checkbox(
+            "Prefer /v1/chat/completions (works without local transformers)",
+            key="prefer_chat_completions",
+        )
+        if st.button("Check vLLM health", use_container_width=True):
+            health = backend.check_vllm_health(st.session_state["server_url"])
+            if health["ok"]:
+                st.success(f"vLLM healthy: {health['url']} [{health['status_code']}]")
+            else:
+                st.error(
+                    f"vLLM unhealthy: {health['url']} "
+                    f"(status={health['status_code']}, error={health['error']})"
+                )
 
         st.header("Prompt Variant")
         st.selectbox(
@@ -211,6 +227,7 @@ def main() -> None:
                     max_tokens=int(st.session_state["max_tokens"]),
                     temperature=float(st.session_state["temperature"]),
                     stop_sequences=sections.stop_sequences,
+                    prefer_chat_completions=bool(st.session_state["prefer_chat_completions"]),
                 )
                 _append_history("single", result)
                 st.success("Single-state run completed.")
@@ -231,6 +248,7 @@ def main() -> None:
                     max_tokens=int(st.session_state["max_tokens"]),
                     temperature=float(st.session_state["temperature"]),
                     stop_sequences=sections.stop_sequences,
+                    prefer_chat_completions=bool(st.session_state["prefer_chat_completions"]),
                 )
                 _append_history("batch", results)
                 st.success("Batch run completed.")

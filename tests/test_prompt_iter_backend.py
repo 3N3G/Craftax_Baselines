@@ -91,3 +91,62 @@ def test_build_prompt_uses_generation_prefix(monkeypatch: pytest.MonkeyPatch) ->
     assert prompt.endswith(sections.generation_prefix)
     assert "YOUR CURRENT GAME STATE" in prompt
     assert "Map (interesting tiles only): 0, 1:tree" in prompt
+
+
+def test_run_state_falls_back_to_chat_when_transformers_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = backend.FixedState(
+        state_id="dummy",
+        label="Dummy",
+        source_kind="unit",
+        source_path="dummy",
+        tags=[],
+        raw_text_obs="Map: 0,0:tree\nInventory:\nHealth: 9.0\n",
+        filtered_text_obs="Map (interesting tiles only): 0, 0:tree\nInventory:\nHealth: 9.0\n",
+    )
+    sections = backend.default_prompt_sections("default")
+
+    def _raise_missing(*_args, **_kwargs):
+        raise ModuleNotFoundError("No module named 'transformers'")
+
+    monkeypatch.setattr(backend, "build_prompt", _raise_missing)
+    monkeypatch.setattr(
+        backend,
+        "run_chat_completion",
+        lambda *_args, **_kwargs: {"choices": [{"message": {"content": "fallback ok"}}]},
+    )
+
+    result = backend.run_state(state, sections, prefer_chat_completions=False)
+    assert result["request_mode"] == "chat_completions_fallback"
+    assert result["response_text"] == "fallback ok"
+    assert "_prompt_iter_note" in result["response_json"]
+
+
+def test_run_state_prefers_chat_completions_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = backend.FixedState(
+        state_id="dummy",
+        label="Dummy",
+        source_kind="unit",
+        source_path="dummy",
+        tags=[],
+        raw_text_obs="Map: 0,0:tree\nInventory:\nHealth: 9.0\n",
+        filtered_text_obs="Map (interesting tiles only): 0, 0:tree\nInventory:\nHealth: 9.0\n",
+    )
+    sections = backend.default_prompt_sections("default")
+
+    def _should_not_call_build_prompt(*_args, **_kwargs):
+        raise AssertionError("build_prompt should not be used in prefer_chat_completions mode")
+
+    monkeypatch.setattr(backend, "build_prompt", _should_not_call_build_prompt)
+    monkeypatch.setattr(
+        backend,
+        "run_chat_completion",
+        lambda *_args, **_kwargs: {"choices": [{"message": {"content": "chat mode ok"}}]},
+    )
+
+    result = backend.run_state(state, sections, prefer_chat_completions=True)
+    assert result["request_mode"] == "chat_completions"
+    assert result["response_text"] == "chat mode ok"

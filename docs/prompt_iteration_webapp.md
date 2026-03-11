@@ -16,6 +16,7 @@ Use SSH local port-forwarding:
 - `configs/prompt_iter/fixed_states_v1.json`
 - `scripts/prompt_iter_backend.py`
 - `scripts/prompt_iter_webapp.py`
+- `scripts/prompt_iter_start.sh`
 
 ## Fixed State Set
 `fixed_states_v1.json` contains exactly 10 states:
@@ -32,7 +33,7 @@ If coordinate formatting is malformed, loading fails early.
 ### Quickstart (Two Terminals)
 Terminal A (keep running):
 ```bash
-zsh -lic 'ssh babel "cd ~/Craftax_Baselines && PYTHONPATH=\$PWD python3 -m streamlit run scripts/prompt_iter_webapp.py --server.address 127.0.0.1 --server.port 8501"'
+zsh -lic 'ssh babel "cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=/data/user_data/geney/.conda/envs/craftax_fast_llm PROMPT_ITER_VLLM_URL=http://127.0.0.1:8000 scripts/prompt_iter_start.sh"'
 ```
 
 Terminal B (local tunnel):
@@ -45,13 +46,17 @@ Then open locally:
 
 ### 1) Start Streamlit on Babel
 ```bash
-zsh -lic 'ssh babel "cd ~/Craftax_Baselines && PYTHONPATH=\$PWD python3 -m streamlit run scripts/prompt_iter_webapp.py --server.address 127.0.0.1 --server.port 8501"'
+zsh -lic 'ssh babel "cd ~/Craftax_Baselines && PROMPT_ITER_ENV_PATH=/data/user_data/geney/.conda/envs/craftax_fast_llm PROMPT_ITER_VLLM_URL=http://127.0.0.1:8000 scripts/prompt_iter_start.sh"'
 ```
 
 If `streamlit` is missing:
 ```bash
-zsh -lic 'ssh babel "python3 -m pip install --user streamlit"'
+zsh -lic 'ssh babel "source ~/.bashrc && conda activate /data/user_data/geney/.conda/envs/craftax_fast_llm && python -m pip install streamlit"'
 ```
+
+Notes:
+- `scripts/prompt_iter_start.sh` activates `PROMPT_ITER_ENV_PATH`, checks `requests` + `streamlit`, and verifies `PROMPT_ITER_VLLM_URL/health` before launch.
+- In the app, `Prefer /v1/chat/completions` is enabled by default so single/batch runs still work when local `transformers` is unavailable.
 
 ### 2) Port-forward locally
 ```bash

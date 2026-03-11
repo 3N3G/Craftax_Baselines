@@ -102,13 +102,12 @@ def default_prompt_sections(prompt_variant: str = "default") -> PromptSections:
     )
 
 
-def build_prompt(
+def build_messages(
     filtered_text_obs: str,
     sections: PromptSections,
-    model_id: str = DEFAULT_MODEL_ID,
-) -> str:
-    tokenizer = _load_tokenizer(model_id)
-    messages = [
+) -> List[Dict[str, str]]:
+    """Build canonical chat messages for the current state."""
+    return [
         {"role": "system", "content": sections.system_prompt},
         {
             "role": "user",
@@ -119,6 +118,15 @@ def build_prompt(
             ),
         },
     ]
+
+
+def build_prompt(
+    filtered_text_obs: str,
+    sections: PromptSections,
+    model_id: str = DEFAULT_MODEL_ID,
+) -> str:
+    tokenizer = _load_tokenizer(model_id)
+    messages = build_messages(filtered_text_obs, sections)
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     if sections.generation_prefix:
         prompt += sections.generation_prefix
@@ -261,6 +269,59 @@ def run_completion(
     return resp.json()
 
 
+def run_chat_completion(
+    messages: List[Dict[str, str]],
+    server_url: str = DEFAULT_VLLM_URL,
+    model_name: str = DEFAULT_VLLM_MODEL,
+    max_tokens: int = 256,
+    temperature: float = 0.7,
+    stop_sequences: Optional[List[str]] = None,
+    timeout: tuple[int, int] = (10, 300),
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "max_tokens": int(max_tokens),
+        "temperature": float(temperature),
+    }
+    if stop_sequences:
+        cleaned = [s for s in stop_sequences if s]
+        if cleaned:
+            payload["stop"] = cleaned
+
+    resp = requests.post(
+        f"{server_url.rstrip('/')}/v1/chat/completions",
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def check_vllm_health(
+    server_url: str = DEFAULT_VLLM_URL,
+    timeout: float = 2.0,
+) -> Dict[str, Any]:
+    """Return health metadata for a vLLM endpoint."""
+    url = f"{server_url.rstrip('/')}/health"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        return {
+            "ok": resp.status_code == 200,
+            "status_code": int(resp.status_code),
+            "url": url,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status_code": None,
+            "url": url,
+            "error": f"{exc.__class__.__name__}: {exc}",
+        }
+
+
 def run_state(
     state: FixedState,
     sections: PromptSections,
@@ -271,23 +332,66 @@ def run_state(
     max_tokens: int = 256,
     temperature: float = 0.7,
     stop_sequences: Optional[List[str]] = None,
+    prefer_chat_completions: bool = False,
 ) -> Dict[str, Any]:
-    prompt = build_prompt(state.filtered_text_obs, sections=sections, model_id=model_id)
+    messages = build_messages(state.filtered_text_obs, sections)
+    prompt = ""
+    request_mode = "completions"
+    response_json: Dict[str, Any]
+
     t0 = time.perf_counter()
-    response_json = run_completion(
-        prompt,
-        server_url=server_url,
-        model_name=model_name,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stop_sequences=stop_sequences,
-    )
+    if prefer_chat_completions:
+        request_mode = "chat_completions"
+        prompt = json.dumps(messages, indent=2, ensure_ascii=True)
+        if sections.generation_prefix:
+            prompt += "\n\n# generation_prefix\n" + sections.generation_prefix
+        response_json = run_chat_completion(
+            messages,
+            server_url=server_url,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stop_sequences=stop_sequences,
+        )
+    else:
+        try:
+            prompt = build_prompt(state.filtered_text_obs, sections=sections, model_id=model_id)
+            response_json = run_completion(
+                prompt,
+                server_url=server_url,
+                model_name=model_name,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stop_sequences=stop_sequences,
+            )
+        except ModuleNotFoundError as exc:
+            # Fallback mode: run via chat completions so local transformers is not required.
+            request_mode = "chat_completions_fallback"
+            prompt = json.dumps(messages, indent=2, ensure_ascii=True)
+            if sections.generation_prefix:
+                prompt += "\n\n# generation_prefix\n" + sections.generation_prefix
+            response_json = run_chat_completion(
+                messages,
+                server_url=server_url,
+                model_name=model_name,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stop_sequences=stop_sequences,
+            )
+            response_json["_prompt_iter_note"] = (
+                "Fell back to /v1/chat/completions because local transformers is unavailable: "
+                f"{exc}"
+            )
     elapsed = time.perf_counter() - t0
 
     response_text = ""
     choices = response_json.get("choices", [])
     if choices:
-        response_text = str(choices[0].get("text", ""))
+        first = choices[0]
+        if "text" in first:
+            response_text = str(first.get("text", ""))
+        elif isinstance(first.get("message"), dict):
+            response_text = str(first.get("message", {}).get("content", ""))
 
     return {
         "state_id": state.state_id,
@@ -299,6 +403,7 @@ def run_state(
         "tags": list(state.tags),
         "filtered_text_obs": state.filtered_text_obs,
         "prompt": prompt,
+        "request_mode": request_mode,
         "response_text": response_text,
         "response_json": response_json,
         "latency_s": elapsed,
@@ -315,6 +420,7 @@ def run_batch(
     max_tokens: int = 256,
     temperature: float = 0.7,
     stop_sequences: Optional[List[str]] = None,
+    prefer_chat_completions: bool = False,
 ) -> List[Dict[str, Any]]:
     results = []
     for state in states:
@@ -328,6 +434,7 @@ def run_batch(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stop_sequences=stop_sequences,
+                prefer_chat_completions=prefer_chat_completions,
             )
         )
     return results
@@ -362,6 +469,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--stop", action="append", default=[])
+    parser.add_argument("--prefer-chat-completions", action="store_true")
     parser.add_argument("--output-json", type=Path, default=None)
     return parser
 
@@ -397,6 +505,7 @@ def main() -> int:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             stop_sequences=sections.stop_sequences,
+            prefer_chat_completions=bool(args.prefer_chat_completions),
         )
         output = {
             "state_id": result["state_id"],
