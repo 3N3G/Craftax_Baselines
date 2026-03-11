@@ -3,13 +3,14 @@
 This tool lets you edit prompt sections and run Qwen/vLLM responses on a deterministic 10-state Craftax set with strict coordinate validation.
 
 ## Access Model (Important)
-When Streamlit runs on Babel with `--server.address 127.0.0.1`, that `127.0.0.1` is Babel's loopback interface, not your laptop.
+You cannot open Babel-hosted Streamlit directly from your laptop browser; you must tunnel.
 
-So you cannot open Babel's app directly from your local browser unless you tunnel it.
+Default behavior in `scripts/prompt_iter_start.sh`:
+- inside Slurm (`SLURM_JOB_ID` set): binds `0.0.0.0` on the compute node
+- outside Slurm: binds `127.0.0.1`
 
-Use SSH local port-forwarding:
-- Babel side: run Streamlit bound to `127.0.0.1:<port>`
-- Local side: `ssh -L <local_port>:127.0.0.1:<remote_port> babel`
+Recommended tunnel for compute-node launch:
+- Local side: `ssh -N -L <local_port>:<compute_node_hostname>:<remote_port> babel`
 - Browser side: open `http://127.0.0.1:<local_port>` on your laptop
 
 ## Compute Node Requirement
@@ -74,12 +75,13 @@ zsh -lic 'ssh babel "source ~/.bashrc && conda activate /data/user_data/geney/.c
 
 Notes:
 - `scripts/prompt_iter_start.sh` activates `PROMPT_ITER_ENV_PATH`, checks `requests` + `streamlit`, and verifies `PROMPT_ITER_VLLM_URL/health` before launch.
+- In Slurm/compute runs, launcher defaults to `PROMPT_ITER_HOST=0.0.0.0`, so `ssh -L ...:<compute_node>:8501 babel` works.
 - In the app, `Prefer /v1/chat/completions` is enabled by default so single/batch runs still work when local `transformers` is unavailable.
 - If you launch on login node without `/data` mounts, the script will fail fast and print an `srun --jobid ... --overlap` example.
 
 ### 2) Port-forward locally
 ```bash
-zsh -lic 'ssh -N -L 8501:127.0.0.1:8501 babel'
+zsh -lic 'ssh -N -L 8501:<compute_node_hostname>:8501 babel'
 ```
 
 Open: `http://127.0.0.1:8501`

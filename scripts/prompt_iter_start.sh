@@ -20,7 +20,15 @@ fi
 PROMPT_ITER_ENV_PATH="${PROMPT_ITER_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
 PROMPT_ITER_VLLM_URL="${PROMPT_ITER_VLLM_URL:-http://127.0.0.1:8000}"
 PROMPT_ITER_REQUIRE_VLLM="${PROMPT_ITER_REQUIRE_VLLM:-1}"
-PROMPT_ITER_HOST="${PROMPT_ITER_HOST:-127.0.0.1}"
+# For Slurm compute-node launches, bind on all interfaces so login-node port-forward
+# to <compute-node>:<port> works. Keep localhost default outside Slurm.
+if [[ -n "${PROMPT_ITER_HOST:-}" ]]; then
+  PROMPT_ITER_HOST="${PROMPT_ITER_HOST}"
+elif [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  PROMPT_ITER_HOST="0.0.0.0"
+else
+  PROMPT_ITER_HOST="127.0.0.1"
+fi
 PROMPT_ITER_PORT="${PROMPT_ITER_PORT:-8501}"
 
 if [[ ! -d "${PROMPT_ITER_ENV_PATH}" ]]; then
