@@ -79,6 +79,18 @@ Use this as a minimal, safe reference for local<->Babel development.
   - For complex remote loops/heredocs (especially with `*`, `$()`, or jq filters), run via `ssh babel "bash -s"` with a single-quoted heredoc (`<<'EOF' ... EOF`) to avoid local zsh globbing/substitution.
   - Inside double-quoted remote strings, escape remote-only variables as `\$var`/`\${var}` so they are expanded on Babel, not locally.
   - Do not rely on unescaped globs in outer `zsh -lic` strings; if command complexity grows, move logic into a checked script and call it remotely.
+- RL QoS sync reliability rule:
+  - After editing any local sbatch header affecting `--partition`/`--qos`, push those exact scripts to Babel with explicit-path `scripts/shell/babel.sh push <path...>` before submitting jobs.
+  - Before submission/resubmission, verify the remote script header includes `#SBATCH --partition=rl` and `#SBATCH --qos=rl_qos` (for RL jobs).
+  - If a pending RL job is blocked with `QOS=normal` and `Job's QOS not permitted`, update it in place (`scontrol update JobId=<id> QOS=rl_qos`) and re-check `squeue`.
+- RL checkpoint quota reliability rule:
+  - Before launching/resuming `run_online_rl_hidden_jax.sbatch`, verify the selected `POLICY_SAVE_DIR`/`CHECKPOINT_DIR` are writable on the target compute node family; fail fast before vLLM startup if write-probe fails.
+  - If `/data/group_data/rl` is at quota/100%, route new checkpoints and CoT logs to a writable user path (for example `/data/user_data/$USER/...`) and keep `RESUME_FROM` pointed at the latest readable checkpoint source.
+  - A recurring `Errno 122 Disk quota exceeded` at policy snapshot time indicates progress will loop between old checkpoints unless checkpoint output path is moved.
+- Large archive reliability rule:
+  - Do not assume a single-node `/scratch` can hold full-dataset tarballs; preflight writable free space on the target node family before starting long archive jobs.
+  - For multi-terabyte directories under quota pressure, prefer resumable sharded archives with durable temp staging (for example `/data/user_data/$USER/...`) over one giant `/scratch/*.tar.gz`.
+  - Only delete source chunks after the corresponding shard passes integrity validation and is durably moved to destination storage.
 - Long-run PPO checkpoint reliability rule:
   - Do not invoke `jax.experimental.io_callback` with full policy params every update just to test save cadence; gate callback execution so params are transferred only when a save is actually due.
   - Periodic checkpoint triggers must use interval-crossing semantics (prev_step//N < curr_step//N), not exact modulo equality, because PPO update stride (`NUM_STEPS*NUM_ENVS`) often does not divide desired save intervals.
