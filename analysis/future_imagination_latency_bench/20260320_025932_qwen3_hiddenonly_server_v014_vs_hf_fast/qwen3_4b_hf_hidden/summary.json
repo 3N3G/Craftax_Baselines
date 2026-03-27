@@ -1,0 +1,32 @@
+[
+  {
+    "model": "Qwen/Qwen3-4B",
+    "variant": "predict_history_k5",
+    "calls": 3,
+    "ok_calls": 3,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 0.679545,
+    "avg_requests_per_second": 1.4715728906842076,
+    "avg_end_to_end_latency_seconds": 0.679545,
+    "avg_end_to_end_responses_per_second": 1.4715728906842076,
+    "avg_hidden_file_load_seconds": 0.679545,
+    "avg_completion_tokens": 0,
+    "avg_prompt_tokens": 6395,
+    "avg_total_tokens": 6395
+  },
+  {
+    "model": "Qwen/Qwen3-4B",
+    "variant": "predict_state_only",
+    "calls": 3,
+    "ok_calls": 3,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 0.12744533333333335,
+    "avg_requests_per_second": 7.846501506528288,
+    "avg_end_to_end_latency_seconds": 0.12744533333333335,
+    "avg_end_to_end_responses_per_second": 7.846501506528288,
+    "avg_hidden_file_load_seconds": 0.12744533333333335,
+    "avg_completion_tokens": 0,
+    "avg_prompt_tokens": 1626,
+    "avg_total_tokens": 1626
+  }
+]

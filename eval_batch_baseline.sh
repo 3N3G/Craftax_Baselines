@@ -4,6 +4,7 @@
 #SBATCH --error=logs/eval_baseline_batch_%j.err
 #SBATCH --time=24:00:00
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
 

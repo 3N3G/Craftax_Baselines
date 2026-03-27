@@ -1,0 +1,128 @@
+You are forecasting a plausible future for a Craftax state using short history context.
+You are NOT given the true future trajectory.
+
+Craftax overview:
+Craftax is a game about exploring dungeons, mining, crafting and fighting enemies.
+
+Use these game rules:
+1) Coordinates are (Row, Column), centered on the player at (0,0).
+   - Negative Row = UP, Positive Row = DOWN.
+   - Negative Column = LEFT, Positive Column = RIGHT.
+2) Intrinsics: Health, Food, Drink, Energy, Mana.
+   - Food/Drink/Energy naturally decay.
+   - If Food/Drink/Energy reaches 0, Health tends to decay.
+   - If Food/Drink/Energy are maintained, Health can recover.
+3) Floor progression uses ladders.
+   - Descending requires reaching/using ladder_down on the current floor.
+   - On non-overworld floors, ladder_down is generally closed until enough mobs on that floor are killed (typically 8), then it opens.
+4) Core loops:
+   - survival loop (stabilize intrinsics first)
+   - resource loop (wood/stone/ore -> tools/weapons/armor)
+   - progression loop (explore, clear threats, descend)
+
+Note uncertainty from spawns, unseen map regions, and encounter randomness. Prefer plausible trajectories over brittle exact claims, but still make specific claims.
+
+Forecasting style requirements:
+- Use recent history to infer momentum and near-term intent.
+- Stay grounded in the provided state/history.
+- Mention uncertainty when appropriate (for example: "likely", "plausibly", "if no interruption").
+- Be concise and information-dense: avoid repetition and filler.
+- Keep the event list focused (typically 3-6 events) unless a longer list is clearly necessary.
+- Keep the trajectory summary short (typically one compact paragraph; use two only when major phase changes occur).
+- Start the first character of your response with `Headline:` (no preamble, no analysis, no notes).
+- Do not describe your reasoning process or restate the task/rules/context.
+- Do not output any text before `Headline:`.
+
+Recent history block:
+[STATE t=1306]
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:darkness, -2, -4:darkness, -1, -4:wall, 0, -4:path, 1, -4:wall, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:darkness, -2, -3:darkness, -1, -3:wall, 0, -3:path, 1, -3:wall, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:darkness, -4, -2:darkness, -3, -2:darkness, -2, -2:darkness, -1, -2:wall, 0, -2:path, 1, -2:wall, 2, -2:darkness, 3, -2:darkness, 4, -2:darkness, 5, -2:darkness, -5, -1:wall, -4, -1:wall, -3, -1:wall, -2, -1:wall, -1, -1:wall, 0, -1:path, 1, -1:wall, 2, -1:wall, 3, -1:wall_moss, 4, -1:wall, 5, -1:wall, -5, 0:path, -4, 0:path, -3, 0:path, -2, 0:path, -1, 0:path, 0, 0:torch on path, 1, 0:path, 2, 0:path, 3, 0:path, 4, 0:path, 5, 0:path, -5, 1:wall, -4, 1:wall, -3, 1:wall, -2, 1:wall, -1, 1:wall, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:fountain, 4, 1:path, 5, 1:path, -5, 2:darkness, -4, 2:darkness, -3, 2:darkness, -2, 2:darkness, -1, 2:wall, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:Snail on path, -5, 3:darkness, -4, 3:darkness, -3, 3:darkness, -2, 3:darkness, -1, 3:wall, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5, 3:path, -5, 4:darkness, -4, 4:darkness, -3, 4:darkness, -2, 4:darkness, -1, 4:wall_moss, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:path, 5, 4:path
+Stats: Health=9, Food=9, Drink=7, Energy=6, Mana=9, XP=1
+Direction=down, Floor=1, LadderOpen=True
+Inventory+: Coal=2, Diamond=1, Green potion=3, Ruby=1, Sapling=1, Stone=17, Torch=14, Wood=5
+Equipment: Iron Sword with No enchantment; Bow with No enchantment
+Action@t=DOWN, Reward@t=0, Done@t=False
+
+[STATE t=1307]
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:darkness, -2, -4:darkness, -1, -4:wall, 0, -4:path, 1, -4:wall, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:darkness, -2, -3:darkness, -1, -3:wall, 0, -3:path, 1, -3:wall, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:wall, -4, -2:wall, -3, -2:wall, -2, -2:wall, -1, -2:wall, 0, -2:path, 1, -2:wall, 2, -2:wall, 3, -2:wall_moss, 4, -2:wall, 5, -2:wall, -5, -1:path, -4, -1:path, -3, -1:path, -2, -1:path, -1, -1:path, 0, -1:torch on path, 1, -1:path, 2, -1:path, 3, -1:path, 4, -1:path, 5, -1:path, -5, 0:wall, -4, 0:wall, -3, 0:wall, -2, 0:wall, -1, 0:wall, 0, 0:path, 1, 0:path, 2, 0:path, 3, 0:fountain, 4, 0:path, 5, 0:path, -5, 1:darkness, -4, 1:darkness, -3, 1:darkness, -2, 1:darkness, -1, 1:wall, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:path, 4, 1:path, 5, 1:Snail on path, -5, 2:darkness, -4, 2:darkness, -3, 2:darkness, -2, 2:darkness, -1, 2:wall, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:path, -5, 3:darkness, -4, 3:darkness, -3, 3:darkness, -2, 3:darkness, -1, 3:wall_moss, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5, 3:path, -5, 4:darkness, -4, 4:darkness, -3, 4:darkness, -2, 4:darkness, -1, 4:wall, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:path, 5, 4:path
+Stats: Health=9, Food=9, Drink=7, Energy=6, Mana=9, XP=1
+Direction=down, Floor=1, LadderOpen=True
+Inventory+: Coal=2, Diamond=1, Green potion=3, Ruby=1, Sapling=1, Stone=17, Torch=14, Wood=5
+Equipment: Iron Sword with No enchantment; Bow with No enchantment
+Action@t=RIGHT, Reward@t=0, Done@t=False
+
+[STATE t=1308]
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:darkness, -2, -4:wall, -1, -4:path, 0, -4:wall, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:darkness, -2, -3:wall, -1, -3:path, 0, -3:wall, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:wall, -4, -2:wall, -3, -2:wall, -2, -2:wall, -1, -2:path, 0, -2:wall, 1, -2:wall, 2, -2:wall_moss, 3, -2:wall, 4, -2:wall, 5, -2:wall, -5, -1:path, -4, -1:path, -3, -1:path, -2, -1:path, -1, -1:torch on path, 0, -1:path, 1, -1:path, 2, -1:path, 3, -1:path, 4, -1:path, 5, -1:torch on path, -5, 0:wall, -4, 0:wall, -3, 0:wall, -2, 0:wall, -1, 0:path, 0, 0:path, 1, 0:path, 2, 0:fountain, 3, 0:path, 4, 0:path, 5, 0:path, -5, 1:darkness, -4, 1:darkness, -3, 1:darkness, -2, 1:wall, -1, 1:path, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:path, 4, 1:Snail on path, 5, 1:path, -5, 2:darkness, -4, 2:darkness, -3, 2:darkness, -2, 2:wall, -1, 2:path, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:path, -5, 3:darkness, -4, 3:darkness, -3, 3:darkness, -2, 3:wall_moss, -1, 3:path, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5, 3:path, -5, 4:darkness, -4, 4:darkness, -3, 4:darkness, -2, 4:wall, -1, 4:path, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:path, 5, 4:path
+Stats: Health=9, Food=9, Drink=7, Energy=6, Mana=9, XP=1
+Direction=right, Floor=1, LadderOpen=True
+Inventory+: Coal=2, Diamond=1, Green potion=3, Ruby=1, Sapling=1, Stone=17, Torch=14, Wood=5
+Equipment: Iron Sword with No enchantment; Bow with No enchantment
+Action@t=RIGHT, Reward@t=0, Done@t=False
+
+[STATE t=1309]
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:wall, -2, -4:path, -1, -4:wall, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:wall, -2, -3:path, -1, -3:wall, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:wall, -4, -2:wall, -3, -2:wall, -2, -2:path, -1, -2:wall, 0, -2:wall, 1, -2:wall_moss, 2, -2:wall, 3, -2:wall, 4, -2:wall, 5, -2:darkness, -5, -1:path, -4, -1:path, -3, -1:path, -2, -1:torch on path, -1, -1:path, 0, -1:path, 1, -1:path, 2, -1:path, 3, -1:path, 4, -1:torch on path, 5, -1:wall, -5, 0:wall, -4, 0:wall, -3, 0:wall, -2, 0:path, -1, 0:path, 0, 0:path, 1, 0:fountain, 2, 0:path, 3, 0:path, 4, 0:path, 5, 0:wall, -5, 1:darkness, -4, 1:darkness, -3, 1:wall, -2, 1:path, -1, 1:path, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:Snail on path, 4, 1:path, 5, 1:wall, -5, 2:darkness, -4, 2:darkness, -3, 2:wall, -2, 2:path, -1, 2:path, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:wall, -5, 3:darkness, -4, 3:darkness, -3, 3:wall_moss, -2, 3:path, -1, 3:path, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5, 3:wall, -5, 4:darkness, -4, 4:darkness, -3, 4:wall, -2, 4:path, -1, 4:path, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:path, 5, 4:wall
+Stats: Health=9, Food=9, Drink=7, Energy=6, Mana=9, XP=1
+Direction=right, Floor=1, LadderOpen=True
+Inventory+: Coal=2, Diamond=1, Green potion=3, Ruby=1, Sapling=1, Stone=17, Torch=14, Wood=5
+Equipment: Iron Sword with No enchantment; Bow with No enchantment
+Action@t=DO, Reward@t=0, Done@t=False
+
+[STATE t=1310]
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:wall, -2, -4:path, -1, -4:wall, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:wall, -2, -3:path, -1, -3:wall, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:wall, -4, -2:wall, -3, -2:wall, -2, -2:path, -1, -2:wall, 0, -2:wall, 1, -2:wall_moss, 2, -2:wall, 3, -2:wall, 4, -2:wall, 5, -2:darkness, -5, -1:path, -4, -1:path, -3, -1:path, -2, -1:torch on path, -1, -1:path, 0, -1:path, 1, -1:path, 2, -1:path, 3, -1:path, 4, -1:torch on path, 5, -1:wall, -5, 0:wall, -4, 0:wall, -3, 0:wall, -2, 0:path, -1, 0:path, 0, 0:path, 1, 0:fountain, 2, 0:path, 3, 0:Snail on path, 4, 0:path, 5, 0:wall, -5, 1:darkness, -4, 1:darkness, -3, 1:wall, -2, 1:path, -1, 1:path, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:path, 4, 1:path, 5, 1:wall, -5, 2:darkness, -4, 2:darkness, -3, 2:wall, -2, 2:path, -1, 2:path, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:wall, -5, 3:darkness, -4, 3:darkness, -3, 3:wall_moss, -2, 3:path, -1, 3:path, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5, 3:wall, -5, 4:darkness, -4, 4:darkness, -3, 4:wall, -2, 4:path, -1, 4:path, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:path, 5, 4:wall
+Stats: Health=9, Food=9, Drink=8, Energy=6, Mana=9, XP=1
+Direction=right, Floor=1, LadderOpen=True
+Inventory+: Coal=2, Diamond=1, Green potion=3, Ruby=1, Sapling=1, Stone=17, Torch=14, Wood=5
+Equipment: Iron Sword with No enchantment; Bow with No enchantment
+Action@t=DO, Reward@t=0, Done@t=False
+
+Current state:
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:wall, -2, -4:path, -1, -4:wall, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:wall, -2, -3:path, -1, -3:wall, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:wall, -4, -2:wall, -3, -2:wall, -2, -2:path, -1, -2:wall, 0, -2:wall, 1, -2:wall_moss, 2, -2:wall, 3, -2:wall, 4, -2:wall, 5, -2:darkness, -5, -1:path, -4, -1:path, -3, -1:path, -2, -1:torch on path, -1, -1:path, 0, -1:path, 1, -1:path, 2, -1:path, 3, -1:path, 4, -1:torch on path, 5, -1:wall, -5, 0:wall, -4, 0:wall, -3, 0:wall, -2, 0:path, -1, 0:path, 0, 0:path, 1, 0:fountain, 2, 0:path, 3, 0:Snail on path, 4, 0:path, 5, 0:wall, -5, 1:darkness, -4, 1:darkness, -3, 1:wall, -2, 1:path, -1, 1:path, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:path, 4, 1:path, 5, 1:wall, -5, 2:darkness, -4, 2:darkness, -3, 2:wall, -2, 2:path, -1, 2:path, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:wall, -5, 3:darkness, -4, 3:darkness, -3, 3:wall_moss, -2, 3:path, -1, 3:path, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5, 3:wall, -5, 4:darkness, -4, 4:darkness, -3, 4:wall, -2, 4:path, -1, 4:path, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:path, 5, 4:wall
+Inventory:
+Wood: 5
+Stone: 17
+Coal: 2
+Iron: 0
+Diamond: 1
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 14
+Arrow: 0
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 3
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 8
+Energy: 6
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: right
+Light: 0.8749996423721313
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: True
+Is Boss Vulnerable: False
+
+Example A (desired format only):
+Headline: Resource setup likely continues before progression commitment.
+
+Meaningful events (ordered):
+1. [t+1 to t+8] The player likely continues the same local gathering/movement pattern seen in the recent history, unless a nearby threat interrupts.
+2. [t+9 to t+24] If intrinsics remain stable, intent likely shifts toward upgrade/progression setup (tooling, repositioning, or threat clearing).
+3. [t+25+] The player plausibly transitions into broader exploration for progression targets, with timing sensitive to map layout and stochastic encounters.
+
+Trajectory summary:
+Near-term behavior is likely an extension of current momentum rather than an abrupt strategy change. The likely path is stabilization and setup first, followed by progression-oriented movement if no major interruption occurs. Exact timings and outcomes remain uncertain because of partial observability and random events.

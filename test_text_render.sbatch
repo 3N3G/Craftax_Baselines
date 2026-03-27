@@ -3,6 +3,7 @@
 #SBATCH --output=/home/geney/Craftax_Baselines/logs/test_text_%j.out
 #SBATCH --error=/home/geney/Craftax_Baselines/logs/test_text_%j.err
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G

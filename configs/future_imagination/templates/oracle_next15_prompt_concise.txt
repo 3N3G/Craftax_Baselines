@@ -1,0 +1,107 @@
+You are writing a human-readable narrative summary of what actually happens in the next 15 steps of a Craftax trajectory.
+
+Craftax overview:
+Craftax is a game about exploring dungeons, mining, crafting and fighting enemies.
+
+Use these game rules:
+1) Coordinates are (Row, Column), centered on the player at (0,0).
+   - Negative Row = UP, Positive Row = DOWN.
+   - Negative Column = LEFT, Positive Column = RIGHT.
+2) Intrinsics: Health, Food, Drink, Energy, Mana. All out of 9.
+   - Food/Drink/Energy naturally decay.
+   - If Food/Drink/Energy reaches 0, Health tends to decay.
+   - If Food/Drink/Energy are maintained, Health can recover.
+3) Floor progression uses ladders.
+   - Descending requires reaching the ladder on the current floor.
+   - On non-overworld floors, the ladder is generally closed until enough mobs on that floor are killed (typically 8), then it opens.
+   - After taking a ladder down, the player will be on a new floor. That ladder will remain and can be used to ascend back to the previous floor, but is different from the ladder that the player must find to descend further.
+
+Here is a good algorithm the player will play the game by:
+At every step, the player should act with the goal of staying alive and progressing down floors. This means the player will choose the highest-priority active goal in this order:
+
+Priority 1: Survive
+The player must track health, food, drink, and energy. If food is low, get food immediately by killing animals and eating them. If drink is low, get drink immediately from water tiles. If energy is low, make a safe enclosure and sleep. If health is low, restore food, drink, and energy before doing anything risky. The player should never sleep in the open. Before sleeping, block enemies out, for example with stone walls.
+
+Priority 2: Take the ladder
+If the ladder is already open, the player should prioritize finding it and using it. On the overworld, progression is just finding the ladder. On later floors, the ladder opens only after 8 troops have been killed. If the ladder is open, the player should stop focusing on upgrades unless the player is on the first floor, where most of the important early resources are found, such as wood, stone, and coal. Each time (and only each time) the player descends to a new floor, they gain one player_xp, which can be used to upgrade one attribute:
+   - Strength: increases max health and physical melee damage
+   - Dexterity: increases max food, drink, and energy and slows their decrease
+   - Intelligence: increases max mana, mana regeneration, and spell damage
+
+Priority 3: Upgrade equipment
+The player should upgrade only when survival is stable and the ladder is not already the main priority.
+Upgrade order:
+   - Pickaxe: wood -> stone -> iron -> diamond
+   - Sword: wood -> stone -> iron -> diamond
+   - Armor: iron -> diamond
+Upgrade rules:
+   - Each pickaxe tier is required to mine the next main material tier: wood pickaxe for stone, stone pickaxe for iron, and iron pickaxe for diamond.
+   - If the player has no useful tools, gather wood first.
+   - If crafting is needed and there is no crafting table nearby, craft a crafting table.
+   - After getting wood tools, mine stone.
+   - After getting stone, craft a stone pickaxe and stone sword.
+   - Mine coal whenever it is seen.
+   - Mine iron whenever it is seen.
+   - If the player has iron, coal, and wood, and is next to a furnace and crafting table, craft iron tools.
+   - If the player has extra iron, craft iron armor.
+   - If the player has diamonds and is next to a furnace and crafting table, craft diamond equipment.
+   - Diamond tools require diamond, coal, and wood.
+   - Diamond armor requires diamond and coal.
+
+Priority 4: Explore
+If the player is not in immediate danger, the ladder is not open, and no immediate upgrade is available, the player should explore.
+While exploring, the player should:
+   - Look for the ladder
+   - Kill troops if the ladder is still closed
+   - Gather useful nearby resources, especially wood, stone, coal, iron, and diamonds
+
+You are given:
+- the current state
+- privileged future trajectory evidence from this point onward (limited to t+0 through t+15)
+
+Your goal:
+- summarize what actually happens next in this short horizon as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Summary style requirements:
+- Stay grounded in the provided states and future evidence. Only describe events that are directly supported by the state changes you observe (e.g. inventory changes, stat changes, map changes). If an action appears but the stats/inventory do not change, the action had no effect — do not claim it succeeded.
+- Be concise and information-dense: avoid repetition and filler.
+- Group related actions into a single event (e.g. chasing and killing a mob, moving to a resource and mining it). Pure movement with no state change does not need its own event — fold it into the next meaningful action. Aim for 3-6 events.
+- Keep the trajectory summary short and focused on this next-15-step window.
+- Start the first character of your response with `Headline:` (no preamble, no analysis, no notes).
+- Do not describe your reasoning process or restate the task/rules/context.
+- Do not output any text before `Headline:`.
+
+Here are two good examples of the desired output format. Ignore the content of the examples, as they are unrelated to your current scene.
+
+Example A
+Headline: Early resource gathering and stone tool crafting on floor 0.
+
+Meaningful events (ordered):
+1. [t+1 to t+3] The player mines two nearby stone tiles (Stone: 0->2).
+2. [t+4 to t+6] The player places a crafting table and crafts a stone pickaxe (Pickaxe: wood->stone, Stone: 2->1).
+3. [t+7 to t+15] The player explores westward, mining coal along the way (Coal: 0->1), then moves toward a cow, likely for food.
+
+Trajectory summary:
+The next few moves are dominated by low-risk resource gathering and tool upgrades. The player converts local stone into a pickaxe upgrade, then shifts to exploration, opportunistically collecting coal on the way.
+
+Example B
+Headline: Recovering energy in a walled-off alcove before resuming combat.
+
+Meaningful events (ordered):
+1. [t+1 to t+2] The player moves into the corridor and places a stone wall to block the south entrance (Stone: 3->2).
+2. [t+3] The player places a second stone wall to seal off the east side (Stone: 2->1).
+3. [t+4 to t+8] The player sleeps (Energy: 2->9). Food and drink decrease slightly (Food: 7->6, Drink: 8->7).
+4. [t+9] The player wakes and mines the eastern wall back (Stone: 1->2).
+5. [t+10 to t+15] The player moves south toward the two Orc Soldiers. Engages the first orc with the stone sword (Health: 9->7).
+
+Trajectory summary:
+The immediate future is about making energy recovery safe and then returning to combat. The player first stabilizes energy behind a temporary stone enclosure, then transitions back into floor-clearing behavior once rested.
+
+Now, summarize the following trajectory.
+
+Current state:
+{current_state_filtered}
+
+Privileged future trajectory evidence:
+{future_state_block}

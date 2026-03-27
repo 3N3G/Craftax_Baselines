@@ -1,0 +1,18 @@
+{
+  "model_id": "Qwen/Qwen3.5-27B",
+  "num_hidden_layers": 64,
+  "selected_layers": [
+    15,
+    31,
+    47,
+    63
+  ],
+  "hidden_size_per_layer": 5120,
+  "verifier_architectures": [
+    "Qwen3_5ForConditionalGeneration"
+  ],
+  "verifier_architectures_used": [
+    "Qwen3_5MoeForCausalLM"
+  ],
+  "verifier_name_or_path_used": "Qwen/Qwen3.5-27B"
+}

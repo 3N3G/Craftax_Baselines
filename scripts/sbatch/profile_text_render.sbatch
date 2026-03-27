@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=profile_text_render
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:RTX_PRO_6000
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G

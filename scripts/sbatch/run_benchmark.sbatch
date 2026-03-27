@@ -15,7 +15,8 @@ set -e
 
 # Load environment
 source ~/.bashrc
-conda activate craftax
+BENCH_ENV_PATH="${BENCH_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
+conda activate "${BENCH_ENV_PATH}"
 
 # Create log directory
 mkdir -p logs

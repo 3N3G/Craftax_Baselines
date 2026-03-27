@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=probe_eval_env
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G

@@ -1,0 +1,18 @@
+{
+  "model_id": "/data/group_data/rl/geney/model_mirrors/Qwen3.5-9B",
+  "num_hidden_layers": 32,
+  "selected_layers": [
+    7,
+    15,
+    23,
+    31
+  ],
+  "hidden_size_per_layer": 4096,
+  "verifier_architectures": [
+    "Qwen3_5ForConditionalGeneration"
+  ],
+  "verifier_architectures_used": [
+    "Qwen3_5ForCausalLM"
+  ],
+  "verifier_name_or_path_used": "/scratch/geney/latbench_6685099/qwen35_9b_compat"
+}

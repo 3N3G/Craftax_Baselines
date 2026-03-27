@@ -1,0 +1,147 @@
+{
+  "timestamp": "2026-02-25T15:24:21.585209",
+  "manifest": "/home/geney/Craftax_Baselines/configs/eval/policy_wave_v2_offline9_only.yaml",
+  "tracks": [
+    "id"
+  ],
+  "num_policies": 1,
+  "policy_ids": [
+    "offline_residual_gated_skip25"
+  ],
+  "seeds": [
+    42
+  ],
+  "results": {
+    "id": {
+      "offline_residual_gated_skip25:final": {
+        "seed_runs": [
+          {
+            "policy": "offline_residual_gated_skip25",
+            "variant": "final",
+            "seed": 42,
+            "episodes": 128,
+            "env_steps": 442,
+            "runtime_sec": 186.61440062522888,
+            "returns": {
+              "mean": 6.381249904632568,
+              "std": 2.4460980892181396,
+              "median": 6.100000858306885,
+              "min": 1.100000023841858,
+              "max": 11.100001335144043,
+              "p10": 3.0999999046325684,
+              "p25": 4.100000858306885,
+              "p75": 8.100000381469727,
+              "p90": 10.099997520446777
+            },
+            "lengths": {
+              "mean": 265.0,
+              "std": 98.40795135498047,
+              "median": 267.5,
+              "min": 39.0,
+              "max": 440.0,
+              "p10": 112.5999984741211,
+              "p25": 210.75,
+              "p75": 347.25,
+              "p90": 380.4999694824219
+            },
+            "achievement_counts": {
+              "mean": 7.28125,
+              "std": 2.446098566055298,
+              "median": 7.0,
+              "min": 2.0,
+              "max": 12.0,
+              "p10": 4.0,
+              "p25": 5.0,
+              "p75": 9.0,
+              "p90": 11.0
+            },
+            "achievement_unlock_rates": {
+              "cast_fireball": 0.0,
+              "cast_iceball": 0.0,
+              "collect_coal": 0.0078125,
+              "collect_diamond": 0.0,
+              "collect_drink": 0.375,
+              "collect_iron": 0.0,
+              "collect_ruby": 0.0,
+              "collect_sapling": 0.9609375,
+              "collect_sapphire": 0.0,
+              "collect_stone": 0.28125,
+              "collect_wood": 0.9609375,
+              "damage_necromancer": 0.0,
+              "defeat_archer": 0.0,
+              "defeat_deep_thing": 0.0,
+              "defeat_fire_elemental": 0.0,
+              "defeat_frost_troll": 0.0,
+              "defeat_gnome_archer": 0.0,
+              "defeat_gnome_warrior": 0.0,
+              "defeat_ice_elemental": 0.0,
+              "defeat_knight": 0.0,
+              "defeat_kobold": 0.0,
+              "defeat_lizard": 0.0,
+              "defeat_necromancer": 0.0,
+              "defeat_orc_mage": 0.0,
+              "defeat_orc_solider": 0.0,
+              "defeat_pigman": 0.0,
+              "defeat_skeleton": 0.0,
+              "defeat_troll": 0.0,
+              "defeat_zombie": 0.2265625,
+              "drink_potion": 0.0,
+              "eat_bat": 0.0,
+              "eat_cow": 0.6640625,
+              "eat_plant": 0.0,
+              "eat_snail": 0.0,
+              "enchant_armour": 0.0,
+              "enchant_sword": 0.0,
+              "enter_dungeon": 0.0,
+              "enter_fire_realm": 0.0,
+              "enter_gnomish_mines": 0.0,
+              "enter_graveyard": 0.0,
+              "enter_ice_realm": 0.0,
+              "enter_sewers": 0.0,
+              "enter_troll_mines": 0.0,
+              "enter_vault": 0.0,
+              "find_bow": 0.0,
+              "fire_bow": 0.0,
+              "learn_fireball": 0.0,
+              "learn_iceball": 0.0,
+              "make_arrow": 0.0078125,
+              "make_diamond_armour": 0.0,
+              "make_diamond_pickaxe": 0.0,
+              "make_diamond_sword": 0.0,
+              "make_iron_armour": 0.0,
+              "make_iron_pickaxe": 0.0,
+              "make_iron_sword": 0.0,
+              "make_stone_pickaxe": 0.015625,
+              "make_stone_sword": 0.0078125,
+              "make_torch": 0.0,
+              "make_wood_pickaxe": 0.453125,
+              "make_wood_sword": 0.4140625,
+              "open_chest": 0.0,
+              "place_furnace": 0.2265625,
+              "place_plant": 0.8046875,
+              "place_stone": 0.2109375,
+              "place_table": 0.8515625,
+              "place_torch": 0.0,
+              "wake_up": 0.8125
+            },
+            "llm_calls": 18,
+            "llm_call_ms_mean": 3066.362096488269,
+            "llm_generation_samples": []
+          }
+        ],
+        "aggregate": {
+          "num_seeds": 1,
+          "return_mean_over_seeds": 6.381249904632568,
+          "return_std_over_seeds": 0.0,
+          "length_mean_over_seeds": 265.0,
+          "achievement_mean_over_seeds": 7.28125,
+          "llm_calls_mean_over_seeds": 18.0
+        }
+      }
+    },
+    "gameplay_llm": {},
+    "ood": {},
+    "bundle": {},
+    "value": {}
+  }
+}

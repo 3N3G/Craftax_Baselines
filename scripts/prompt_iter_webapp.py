@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from dataclasses import asdict
@@ -26,7 +27,7 @@ def _init_defaults() -> None:
     if "manifest_path" not in st.session_state:
         st.session_state["manifest_path"] = str(backend.DEFAULT_MANIFEST)
     if "server_url" not in st.session_state:
-        st.session_state["server_url"] = backend.DEFAULT_VLLM_URL
+        st.session_state["server_url"] = os.getenv("PROMPT_ITER_VLLM_URL", backend.DEFAULT_VLLM_URL)
     if "model_name" not in st.session_state:
         st.session_state["model_name"] = backend.DEFAULT_VLLM_MODEL
     if "model_id" not in st.session_state:
@@ -168,11 +169,21 @@ def main() -> None:
         if st.button("Reset sections from variant defaults", use_container_width=True):
             _set_sections_from_variant(st.session_state["prompt_variant"])
 
+    fixed_states = None
     try:
         fixed_states = _load_states(st.session_state["manifest_path"])
+        st.session_state["last_good_fixed_states"] = fixed_states
     except Exception as exc:
-        st.error(f"Failed to load fixed states: {exc}")
-        return
+        cached_states = st.session_state.get("last_good_fixed_states")
+        if cached_states:
+            fixed_states = cached_states
+            st.warning(
+                "Failed to reload fixed states from the selected manifest; "
+                f"showing last successful state set instead. Error: {exc}"
+            )
+        else:
+            st.error(f"Failed to load fixed states: {exc}")
+            return
 
     by_id = backend.states_by_id(fixed_states)
 

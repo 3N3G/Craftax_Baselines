@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "configs" / "prompt_iter" / "fixed_states_v1.json"
 DEFAULT_MODEL_ID = "Qwen/Qwen3-4B-Thinking-2507"
 DEFAULT_VLLM_MODEL = "./configs/vllm_hidden_qwen4b"
-DEFAULT_VLLM_URL = "http://127.0.0.1:8000"
+DEFAULT_VLLM_URL = os.getenv("PROMPT_ITER_VLLM_URL", "http://127.0.0.1:8000")
 _COORD_ENTRY_RE = re.compile(r"-?\d+\s*,\s*-?\d+\s*:[^,]+")
 _COORD_PREFIX_RE = re.compile(r"-?\d+\s*,\s*-?\d+\s*:")
 

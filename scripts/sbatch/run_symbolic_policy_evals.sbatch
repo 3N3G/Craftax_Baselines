@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=symbolic_evals
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
@@ -29,26 +30,8 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "ERROR: conda not found after sourcing bashrc"
-    exit 1
-fi
-
-activate_conda_for() {
-    local purpose="$1"
-    shift
-    local env_name
-    for env_name in "$@"; do
-        if conda activate "${env_name}" >/dev/null 2>&1; then
-            echo "Activated conda env for ${purpose}: ${env_name}"
-            return 0
-        fi
-    done
-    echo "ERROR: failed to activate conda env for ${purpose}"
-    echo "Tried: $*"
-    conda env list || true
-    return 1
-}
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
 
 echo "========================================"
 echo "Craftax Symbolic Policy Eval Suite"
@@ -62,8 +45,13 @@ TARGET_EPISODES=${TARGET_EPISODES:-128}
 MAX_ENV_STEPS=${MAX_ENV_STEPS:-80000}
 OUTPUT_JSON=${OUTPUT_JSON:-logs/policy_eval_craftax_symbolic_evals_${SLURM_JOB_ID}.json}
 LLM_TOKENS=${LLM_TOKENS:-1}
-VIDEO_MAX_STEPS=${VIDEO_MAX_STEPS:-600}
+VIDEO_MAX_STEPS=${VIDEO_MAX_STEPS:-1000000000}
 VIDEO_FPS=${VIDEO_FPS:-12}
+NUM_VIDEOS=${NUM_VIDEOS:-10}
+NUM_HIGHLIGHT_VIDEOS=${NUM_HIGHLIGHT_VIDEOS:-0}
+HIGHLIGHT_RETURN_THRESHOLD=${HIGHLIGHT_RETURN_THRESHOLD:-25}
+HIGHLIGHT_VIDEO_MAX_ATTEMPTS=${HIGHLIGHT_VIDEO_MAX_ATTEMPTS:-128}
+HIGHLIGHT_SCOUT_MAX_STEPS=${HIGHLIGHT_SCOUT_MAX_STEPS:-4000}
 VIDEO_LLM_TOKENS=${VIDEO_LLM_TOKENS:-1}
 VIDEO_LLM_MAX_WORDS=${VIDEO_LLM_MAX_WORDS:-12}
 VIDEO_GAMMA=${VIDEO_GAMMA:-0.99}
@@ -73,7 +61,10 @@ VLLM_PORT_BASE=${VLLM_PORT_BASE:-20000}
 MANIFEST=${MANIFEST:-}
 MANIFEST_POLICY_IDS=${MANIFEST_POLICY_IDS:-}
 POLICIES=${POLICIES:-}
-EVAL_ENV_CANDIDATES=${EVAL_ENV_CANDIDATES:-/data/user_data/geney/.conda/envs/imaug,imaug,/data/user_data/geney/.conda/envs/craftax,craftax,base}
+WANDB_PROJECT=${WANDB_PROJECT:-craftax_symbolic_evals}
+WANDB_ENTITY=${WANDB_ENTITY:-iris-sobolmark}
+EVAL_ENV_PATH=${EVAL_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax}
+VLLM_ENV_PATH=${VLLM_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}
 
 # Keep vLLM cache/tmp off shared home and onto local scratch.
 export VLLM_TMP_ROOT=${VLLM_TMP_ROOT:-/scratch/${USER}/craftax_vllm_eval_${SLURM_JOB_ID}}
@@ -108,13 +99,10 @@ find_open_port() {
 }
 
 # Precheck eval env before spending GPU time on vLLM startup.
-PRECHECK_EVAL_ENV_OK=0
-PRECHECK_EVAL_ENV=""
-PRECHECK_EVAL_PY=""
 REQUIRE_GPU_JAX=${REQUIRE_GPU_JAX:-1}
 PRECHECK_MODS='import importlib
 import os
-mods = ["torch", "jax", "craftax", "flax", "optax", "orbax.checkpoint", "distrax", "cv2"]
+mods = ["jax", "craftax", "flax", "optax", "orbax.checkpoint", "distrax", "numpy", "wandb", "yaml"]
 missing = []
 for m in mods:
     try:
@@ -131,47 +119,24 @@ if require_gpu:
         raise SystemExit(f"jax_backend_not_gpu: {backend}")
 print("python_import_check_ok")
 '
-IFS=',' read -r -a _precheck_candidates <<< "${EVAL_ENV_CANDIDATES}"
-for _raw in "${_precheck_candidates[@]}"; do
-    _candidate="$(echo "${_raw}" | xargs)"
-    [[ -z "${_candidate}" ]] && continue
-    _py_candidate=""
-    if [[ -x "${_candidate}/bin/python" ]]; then
-        _py_candidate="${_candidate}/bin/python"
-    elif conda activate "${_candidate}" >/dev/null 2>&1; then
-        _py_candidate="$(command -v python || true)"
-    fi
-    [[ -z "${_py_candidate}" ]] && continue
-    if "${_py_candidate}" - <<PY >/dev/null 2>&1
+sbatch_activate_conda_env "policy-eval-precheck" "${EVAL_ENV_PATH}"
+if ! python - <<PY >/dev/null 2>&1
 ${PRECHECK_MODS}
 PY
-    then
-        PRECHECK_EVAL_ENV_OK=1
-        PRECHECK_EVAL_ENV="${_candidate}"
-        PRECHECK_EVAL_PY="${_py_candidate}"
-        break
-    fi
-done
-if [[ ${PRECHECK_EVAL_ENV_OK} -ne 1 ]]; then
-    echo "ERROR: no usable eval env found during precheck."
-    echo "Tried candidates: ${EVAL_ENV_CANDIDATES}"
-    conda env list || true
+then
+    echo "ERROR: eval env import precheck failed for ${EVAL_ENV_PATH}"
     exit 1
 fi
-echo "Precheck selected eval env: ${PRECHECK_EVAL_ENV}"
-echo "Precheck selected eval python: ${PRECHECK_EVAL_PY}"
+EVAL_PY="$(command -v python)"
+echo "Precheck selected eval env: ${EVAL_ENV_PATH}"
+echo "Precheck selected eval python: ${EVAL_PY}"
+conda deactivate >/dev/null 2>&1 || true
 
 if [[ "${START_VLLM}" == "1" ]]; then
     echo "Starting vLLM hidden-state server..."
-    VLLM_BIN_DIR="/data/user_data/geney/.conda/envs/craftax_fast_llm/bin"
-    if [[ ! -x "${VLLM_BIN_DIR}/python" ]]; then
-        activate_conda_for "vllm-server" \
-            /data/user_data/geney/.conda/envs/craftax_fast_llm \
-            craftax_fast_llm \
-            base
-        VLLM_BIN_DIR="$(dirname "$(command -v python)")"
-        conda deactivate >/dev/null 2>&1 || true
-    fi
+    sbatch_activate_conda_env "vllm-server" "${VLLM_ENV_PATH}"
+    VLLM_BIN_DIR="$(dirname "$(command -v python)")"
+    conda deactivate >/dev/null 2>&1 || true
 
     JOB_SUFFIX=$((SLURM_JOB_ID % 1000))
     DESIRED_PORT=$((VLLM_PORT_BASE + JOB_SUFFIX * 20))
@@ -215,11 +180,8 @@ else
 fi
 
 echo "Switching to training/eval env..."
-EVAL_PY="${PRECHECK_EVAL_PY}"
-if [[ -z "${EVAL_PY}" || ! -x "${EVAL_PY}" ]]; then
-    activate_conda_for "policy-eval" "${PRECHECK_EVAL_ENV}"
-    EVAL_PY="$(command -v python)"
-fi
+sbatch_activate_conda_env "policy-eval" "${EVAL_ENV_PATH}"
+EVAL_PY="$(command -v python)"
 
 EXTRA_ARGS=()
 if [[ -n "${MANIFEST}" ]]; then
@@ -234,14 +196,19 @@ fi
 
 echo "Running evaluation suite..."
 "${EVAL_PY}" -u scripts/eval_symbolic_policy_suite.py \
-    --wandb-project craftax_symbolic_evals \
-    --wandb-entity iris-sobolmark \
+    --wandb-project "${WANDB_PROJECT}" \
+    --wandb-entity "${WANDB_ENTITY}" \
     --num-envs "${NUM_ENVS}" \
     --target-episodes "${TARGET_EPISODES}" \
     --max-env-steps "${MAX_ENV_STEPS}" \
     --llm-tokens "${LLM_TOKENS}" \
     --video-max-steps "${VIDEO_MAX_STEPS}" \
     --video-fps "${VIDEO_FPS}" \
+    --num-videos "${NUM_VIDEOS}" \
+    --num-highlight-videos "${NUM_HIGHLIGHT_VIDEOS}" \
+    --highlight-return-threshold "${HIGHLIGHT_RETURN_THRESHOLD}" \
+    --highlight-video-max-attempts "${HIGHLIGHT_VIDEO_MAX_ATTEMPTS}" \
+    --highlight-scout-max-steps "${HIGHLIGHT_SCOUT_MAX_STEPS}" \
     --video-llm-tokens "${VIDEO_LLM_TOKENS}" \
     --video-llm-max-words "${VIDEO_LLM_MAX_WORDS}" \
     --video-gamma "${VIDEO_GAMMA}" \

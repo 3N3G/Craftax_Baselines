@@ -1,0 +1,24 @@
+{
+  "timestamp_utc": "2026-03-26T03:26:15.074108+00:00",
+  "args": {
+    "data_dir": "/data/group_data/rl/geney/new_craftax_llm_labelled_results_shards/final_trajectories",
+    "data_glob": "trajectories_*.npz",
+    "max_files": 126,
+    "file_offset": 0,
+    "total_steps": 100000,
+    "batch_size": 256,
+    "lr": 0.0003,
+    "awr_beta": 10.0,
+    "hidden_mode": "real",
+    "advantage_mode": "center",
+    "max_dataset_gb": 100.0,
+    "save_dir": "/data/group_data/rl/geney/checkpoints/awr_imagination/",
+    "save_freq": 25000,
+    "seed": 42,
+    "wandb_name": null,
+    "no_wandb": false
+  },
+  "total_params": 14260268,
+  "dataset_samples": 2111592,
+  "num_shards": 6
+}

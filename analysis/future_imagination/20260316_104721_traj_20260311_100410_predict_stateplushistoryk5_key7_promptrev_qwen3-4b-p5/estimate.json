@@ -1,0 +1,45 @@
+{
+  "selected_timesteps": 7,
+  "run_specs": 2,
+  "total_calls": 14,
+  "prompt_chars_total": 107238,
+  "prompt_tokens_rough_total": 26810,
+  "per_run": {
+    "predict_state_only": {
+      "num_calls": 7,
+      "prompt_chars_total": 30825,
+      "prompt_chars_mean": 4403.571428571428,
+      "prompt_tokens_rough_total": 7706,
+      "prompt_tokens_rough_mean": 1100.892857142857
+    },
+    "predict_history_k5": {
+      "num_calls": 7,
+      "prompt_chars_total": 76413,
+      "prompt_chars_mean": 10916.142857142857,
+      "prompt_tokens_rough_total": 19103,
+      "prompt_tokens_rough_mean": 2729.035714285714
+    }
+  },
+  "trajectory_dir": "/home/geney/Craftax_Baselines/play_data/trajectory_records/traj_20260311_100410",
+  "trajectory_id": "traj_20260311_100410",
+  "selection": {
+    "mode": "explicit_only",
+    "start_t": 0,
+    "end_t": 0,
+    "stride": 1,
+    "max_states": null,
+    "include_terminal_t": false,
+    "explicit_timesteps": [
+      0,
+      283,
+      298,
+      2180,
+      2195,
+      1310,
+      1450
+    ]
+  },
+  "provider": "hf_local",
+  "model": "Qwen/Qwen3-4B",
+  "dry_run": false
+}

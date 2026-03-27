@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=online_rl_hidden_jax
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
@@ -41,26 +42,8 @@ exec 2> >(tee -a "${RUNTIME_STDERR}" >&2)
 echo "Runtime log mirror: ${RUNTIME_STDOUT}"
 echo "Runtime error mirror: ${RUNTIME_STDERR}"
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "ERROR: conda not found after sourcing bashrc"
-    exit 1
-fi
-
-activate_conda_for() {
-    local purpose="$1"
-    shift
-    local env_name
-    for env_name in "$@"; do
-        if conda activate "${env_name}" >/dev/null 2>&1; then
-            echo "Activated conda env for ${purpose}: ${env_name}"
-            return 0
-        fi
-    done
-    echo "ERROR: failed to activate conda env for ${purpose}"
-    echo "Tried: $*"
-    conda env list || true
-    return 1
-}
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
 
 python_import_preflight() {
     if command -v timeout >/dev/null 2>&1; then
@@ -281,6 +264,25 @@ resolve_slurm_timelimit() {
     echo "${timelimit}"
 }
 
+ensure_dir_writable() {
+    local dir="$1"
+    local label="$2"
+    if [[ -z "${dir}" ]]; then
+        echo "ERROR: ${label} is empty."
+        exit 1
+    fi
+    if ! mkdir -p "${dir}" >/dev/null 2>&1; then
+        echo "ERROR: unable to create ${label}: ${dir}"
+        exit 1
+    fi
+    local probe="${dir}/.write_probe_${SLURM_JOB_ID}_$$"
+    if ! ( : > "${probe}" ) 2>/dev/null; then
+        echo "ERROR: ${label} is not writable (possible quota exhaustion): ${dir}"
+        exit 1
+    fi
+    rm -f "${probe}" >/dev/null 2>&1 || true
+}
+
 start_walltime_watchdog() {
     local grace="${TERM_GRACE_SECONDS:-300}"
     local timelimit
@@ -317,6 +319,8 @@ POLICY_SAVE_DIR=${8:-/data/group_data/rl/geney/online_rl_hidden_models}
 CHECKPOINT_DIR=${CHECKPOINT_DIR:-${9:-}}
 RESUME_FROM=${RESUME_FROM:-${10:-}}
 NO_LLM=${NO_LLM:-0}
+TRAIN_ENV_PATH=${TRAIN_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax}
+VLLM_ENV_PATH=${VLLM_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}
 RUN_NAME=${RUN_NAME:-}
 VLLM_PORT_BASE=${VLLM_PORT_BASE:-18000}
 VLLM_EXPECTED_MODEL=${VLLM_EXPECTED_MODEL:-./configs/vllm_hidden_qwen4b}
@@ -324,11 +328,26 @@ VLLM_READY_TIMEOUT_SECONDS=${VLLM_READY_TIMEOUT_SECONDS:-3600}
 HIDDEN_POOLING=${HIDDEN_POOLING:-last_token}
 HIDDEN_POOLING_K=${HIDDEN_POOLING_K:-8}
 TEMPERATURE=${TEMPERATURE:-0.7}
+PROMPT_VARIANT=${PROMPT_VARIANT:-default}
 SAVE_TRAJ_ONLINE=${SAVE_TRAJ_ONLINE:-0}
 TRAJ_SAVE_DIR=${TRAJ_SAVE_DIR:-}
 TRAJ_SAVE_EVERY_UPDATES=${TRAJ_SAVE_EVERY_UPDATES:-50}
 TRAJ_FREE_SPACE_MIN_GB=${TRAJ_FREE_SPACE_MIN_GB:-150}
 TRAJ_SCHEMA=${TRAJ_SCHEMA:-minimal_core}
+COT_LOG_TEXT=${COT_LOG_TEXT:-auto}
+COT_LOG_FIRST_UPDATES=${COT_LOG_FIRST_UPDATES:-10}
+COT_LOG_EVERY_UPDATES=${COT_LOG_EVERY_UPDATES:-100}
+COT_LOG_SAMPLES=${COT_LOG_SAMPLES:-2}
+COT_LOG_MAX_CHARS=${COT_LOG_MAX_CHARS:-0}
+COT_LOG_FILE=${COT_LOG_FILE:-}
+
+if [[ "${COT_LOG_TEXT}" == "auto" ]]; then
+    if (( TOKENS > 1 )); then
+        COT_LOG_TEXT=1
+    else
+        COT_LOG_TEXT=0
+    fi
+fi
 
 CHAIN_ENABLED=${CHAIN_ENABLED:-0}
 CHAIN_TARGET_STEPS=${CHAIN_TARGET_STEPS:-${TIMESTEPS}}
@@ -340,6 +359,13 @@ if [[ -z "${CHAIN_CHECKPOINT_DIR}" ]]; then
     CHAIN_CHECKPOINT_DIR="${EFFECTIVE_CHECKPOINT_DIR}"
 fi
 CHAIN_START_STEP="$(resolve_resume_step "${RESUME_FROM}")"
+
+# Fail fast on quota/writability issues before expensive startup.
+ensure_dir_writable "${POLICY_SAVE_DIR}" "POLICY_SAVE_DIR"
+ensure_dir_writable "${EFFECTIVE_CHECKPOINT_DIR}" "CHECKPOINT_DIR"
+if [[ -n "${COT_LOG_FILE}" ]]; then
+    ensure_dir_writable "$(dirname "${COT_LOG_FILE}")" "COT_LOG_FILE parent directory"
+fi
 
 echo "========================================"
 echo "Online RL with vLLM Hidden States (JAX)"
@@ -355,6 +381,7 @@ echo "Skip-N: $SKIP_N (LLM inference every $SKIP_N steps)"
 echo "Num-steps/update: $NUM_STEPS"
 echo "Extract layer: $LAYER"
 echo "Tokens to generate: $TOKENS"
+echo "Prompt variant: ${PROMPT_VARIANT}"
 echo "Hidden pooling: ${HIDDEN_POOLING} (k=${HIDDEN_POOLING_K})"
 echo "Temperature: ${TEMPERATURE}"
 echo "No LLM mode: $NO_LLM"
@@ -367,6 +394,14 @@ if [[ "${SAVE_TRAJ_ONLINE}" == "1" ]]; then
     echo "Trajectory dir: ${TRAJ_SAVE_DIR:-<auto>}"
     echo "Trajectory save every updates: ${TRAJ_SAVE_EVERY_UPDATES}"
     echo "Trajectory free-space floor: ${TRAJ_FREE_SPACE_MIN_GB} GB"
+fi
+echo "CoT text logging: ${COT_LOG_TEXT}"
+if [[ "${COT_LOG_TEXT}" == "1" ]]; then
+    echo "CoT log first updates: ${COT_LOG_FIRST_UPDATES}"
+    echo "CoT log every updates: ${COT_LOG_EVERY_UPDATES}"
+    echo "CoT log samples: ${COT_LOG_SAMPLES}"
+    echo "CoT log max chars: ${COT_LOG_MAX_CHARS}"
+    echo "CoT log file: ${COT_LOG_FILE:-<auto>}"
 fi
 echo "Chain enabled: ${CHAIN_ENABLED}"
 echo "Chain start step: ${CHAIN_START_STEP}"
@@ -404,10 +439,7 @@ start_walltime_watchdog
 
 if [[ "${NO_LLM}" != "1" ]]; then
     # Preflight training env before expensive vLLM startup.
-    activate_conda_for "training-preflight" \
-        /data/user_data/geney/.conda/envs/craftax \
-        craftax \
-        base
+    sbatch_activate_conda_env "training-preflight" "${TRAIN_ENV_PATH}"
     if ! python_import_preflight; then
         echo "ERROR: training env import preflight failed."
         exit 1
@@ -436,10 +468,7 @@ if [[ "${NO_LLM}" != "1" ]]; then
     fi
 
     echo "Starting vLLM server (mode=${VLLM_MODE})..."
-    activate_conda_for "vllm-server" \
-        /data/user_data/geney/.conda/envs/craftax_fast_llm \
-        craftax_fast_llm \
-        base
+    sbatch_activate_conda_env "vllm-server" "${VLLM_ENV_PATH}"
     bash scripts/start_vllm_hidden.sh \
         --mode "${VLLM_MODE}" \
         --port "${VLLM_PORT}" > "logs/vllm_server_jax_${SLURM_JOB_ID}.log" 2>&1 &
@@ -470,10 +499,7 @@ if [[ "${NO_LLM}" != "1" ]]; then
         fi
     done
 else
-    activate_conda_for "training-preflight" \
-        /data/user_data/geney/.conda/envs/craftax \
-        craftax \
-        base
+    sbatch_activate_conda_env "training-preflight" "${TRAIN_ENV_PATH}"
     if ! python_import_preflight; then
         echo "ERROR: training env import preflight failed."
         exit 1
@@ -482,10 +508,7 @@ else
 fi
 
 # Switch to training env and run.
-activate_conda_for "training" \
-    /data/user_data/geney/.conda/envs/craftax \
-    craftax \
-    base
+sbatch_activate_conda_env "training" "${TRAIN_ENV_PATH}"
 
 PY_ARGS=(
     --envs "$ENVS"
@@ -494,6 +517,7 @@ PY_ARGS=(
     --num-steps "$NUM_STEPS"
     --layer "$LAYER"
     --tokens "$TOKENS"
+    --prompt-variant "$PROMPT_VARIANT"
     --hidden-pooling "$HIDDEN_POOLING"
     --hidden-pooling-k "$HIDDEN_POOLING_K"
     --temperature "$TEMPERATURE"
@@ -522,6 +546,16 @@ if [[ "${SAVE_TRAJ_ONLINE}" == "1" ]]; then
     PY_ARGS+=(--traj-save-every-updates "$TRAJ_SAVE_EVERY_UPDATES")
     PY_ARGS+=(--traj-free-space-min-gb "$TRAJ_FREE_SPACE_MIN_GB")
     PY_ARGS+=(--traj-schema "$TRAJ_SCHEMA")
+fi
+if [[ "${COT_LOG_TEXT}" == "1" ]]; then
+    PY_ARGS+=(--log-cot-text)
+    PY_ARGS+=(--cot-log-first-updates "$COT_LOG_FIRST_UPDATES")
+    PY_ARGS+=(--cot-log-every-updates "$COT_LOG_EVERY_UPDATES")
+    PY_ARGS+=(--cot-log-samples "$COT_LOG_SAMPLES")
+    PY_ARGS+=(--cot-log-max-chars "$COT_LOG_MAX_CHARS")
+    if [[ -n "${COT_LOG_FILE}" ]]; then
+        PY_ARGS+=(--cot-log-file "$COT_LOG_FILE")
+    fi
 fi
 
 echo "Launching training..."
@@ -593,13 +627,20 @@ maybe_submit_successor() {
     local sbatch_file="scripts/sbatch/run_online_rl_hidden_jax.sbatch"
     local next_export
     next_export=$(
-        printf "ALL,RUN_NAME=%s,CHECKPOINT_DIR=%s,RESUME_FROM=%s,CHAIN_ENABLED=1,CHAIN_TARGET_STEPS=%s,CHAIN_CHECKPOINT_DIR=%s,CHAIN_RUN_NAME=%s" \
+        printf "ALL,RUN_NAME=%s,CHECKPOINT_DIR=%s,RESUME_FROM=%s,CHAIN_ENABLED=1,CHAIN_TARGET_STEPS=%s,CHAIN_CHECKPOINT_DIR=%s,CHAIN_RUN_NAME=%s,PROMPT_VARIANT=%s,COT_LOG_TEXT=%s,COT_LOG_FIRST_UPDATES=%s,COT_LOG_EVERY_UPDATES=%s,COT_LOG_SAMPLES=%s,COT_LOG_MAX_CHARS=%s,COT_LOG_FILE=%s" \
             "${CHAIN_RUN_NAME}" \
             "${CHAIN_CHECKPOINT_DIR}" \
             "${submit_resume_from}" \
             "${CHAIN_TARGET_STEPS}" \
             "${CHAIN_CHECKPOINT_DIR}" \
-            "${CHAIN_RUN_NAME}"
+            "${CHAIN_RUN_NAME}" \
+            "${PROMPT_VARIANT}" \
+            "${COT_LOG_TEXT}" \
+            "${COT_LOG_FIRST_UPDATES}" \
+            "${COT_LOG_EVERY_UPDATES}" \
+            "${COT_LOG_SAMPLES}" \
+            "${COT_LOG_MAX_CHARS}" \
+            "${COT_LOG_FILE}"
     )
     local submit_out
     submit_out=$(

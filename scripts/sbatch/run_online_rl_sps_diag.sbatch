@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=online_rl_sps_diag
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:RTX_PRO_6000
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
@@ -33,6 +34,8 @@ fi
 cd ~/Craftax_Baselines
 mkdir -p logs
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
 
 RUN_DIR="logs/diag_online_rl_sps_${SLURM_JOB_ID}"
 mkdir -p "${RUN_DIR}"
@@ -46,6 +49,8 @@ TOKENS=${6:-1}
 SKIP_CSV=${7:-1,4,16,64}
 EXTRACT_ITERS=${8:-20}
 EXTRACT_WARMUP=${9:-3}
+TRAIN_ENV_PATH=${TRAIN_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax}
+VLLM_ENV_PATH=${VLLM_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}
 
 IFS=',' read -r -a SKIPS <<< "${SKIP_CSV}"
 
@@ -59,27 +64,6 @@ echo "params: envs=${ENVS} num_steps=${NUM_STEPS} timesteps_no_llm=${TIMESTEPS_N
 echo "params: layer=${LAYER} tokens=${TOKENS} skips=${SKIP_CSV}"
 echo "======================================================================"
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "ERROR: conda not found after sourcing bashrc"
-    exit 1
-fi
-
-activate_conda_for() {
-    local purpose="$1"
-    shift
-    local env_name
-    for env_name in "$@"; do
-        if conda activate "${env_name}" >/dev/null 2>&1; then
-            echo "Activated conda env for ${purpose}: ${env_name}"
-            return 0
-        fi
-    done
-    echo "ERROR: failed to activate conda env for ${purpose}"
-    echo "Tried: $*"
-    conda env list || true
-    return 1
-}
-
 VLLM_PID=""
 cleanup() {
     if [[ -n "${VLLM_PID}" ]]; then
@@ -91,10 +75,7 @@ trap cleanup EXIT
 
 echo ""
 echo "[1/4] No-LLM baseline (no vLLM server)"
-activate_conda_for "training(no-llm)" \
-    /data/user_data/geney/.conda/envs/craftax \
-    craftax \
-    base
+sbatch_activate_conda_env "training(no-llm)" "${TRAIN_ENV_PATH}"
 python -u online_rl_llm/online_rl_hidden_jax.py \
     --no-llm \
     --envs "${ENVS}" \
@@ -104,10 +85,7 @@ python -u online_rl_llm/online_rl_hidden_jax.py \
 
 echo ""
 echo "[2/4] Start vLLM server"
-activate_conda_for "vllm-server" \
-    /data/user_data/geney/.conda/envs/craftax_fast_llm \
-    craftax_fast_llm \
-    base
+sbatch_activate_conda_env "vllm-server" "${VLLM_ENV_PATH}"
 bash scripts/start_vllm_hidden.sh --mode last_token > "${RUN_DIR}/vllm_server.log" 2>&1 &
 VLLM_PID=$!
 echo "vLLM pid=${VLLM_PID}"
@@ -132,10 +110,7 @@ done
 
 echo ""
 echo "[3/4] Hidden extractor microbenchmark"
-activate_conda_for "training(extractor)" \
-    /data/user_data/geney/.conda/envs/craftax \
-    craftax \
-    base
+sbatch_activate_conda_env "training(extractor)" "${TRAIN_ENV_PATH}"
 python -u scripts/diagnostics/bench_hidden_extractor.py \
     --envs "${ENVS}" \
     --iters "${EXTRACT_ITERS}" \
