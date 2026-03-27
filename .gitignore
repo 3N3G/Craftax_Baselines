@@ -6,6 +6,10 @@ logs/
 eval_videos*/
 core.*
 
+# SLURM job output
+*.err
+*.out
+
 # Model weight symlinks (point to machine-specific HF cache paths)
 vllm_hidden_qwen4b/*.safetensors
 
