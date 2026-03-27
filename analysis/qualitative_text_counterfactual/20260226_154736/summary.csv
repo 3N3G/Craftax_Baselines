@@ -1,0 +1,2 @@
+policy_id,policy_name,variant_name,checkpoint_path,llm_layer,num_counterfactuals,action_change_count,action_change_rate,value_delta_mean,value_delta_std,value_delta_abs_mean
+online_skip25_final,online_skip25_final,step_20260225,/data/group_data/rl/geney/online_rl_hidden_models/online-jax-128env-skip25-dualconcat-l24-100m-rerun4_20260225_230016.msgpack,24,11,0,0.0,-0.02849973619661548,0.07891404167798237,0.0553827148608186

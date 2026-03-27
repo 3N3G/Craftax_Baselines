@@ -1,0 +1,37 @@
+Map (interesting tiles only): 3, -4:tree, -3, -3:tree, 0, -3:tree, 2, -3:tree, -4, -2:tree, 4, -2:Cow on sand, 5, -2:tree, -5, -1:tree, -4, 0:tree, 0, 3:tree, 1, 4:tree
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 8
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: down
+Light: 0.9539756774902344
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False

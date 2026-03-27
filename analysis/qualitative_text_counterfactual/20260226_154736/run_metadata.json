@@ -1,0 +1,16 @@
+{
+  "manifest": "/home/geney/Craftax_Baselines/configs/eval/policy_text_counterfactual_5policies.yaml",
+  "bundle_dir": "/home/geney/Craftax_Baselines/golden_examples/game_20260225_211753",
+  "counterfactuals_yaml": "/home/geney/Craftax_Baselines/golden_examples/game_20260225_211753/manual_counterfactuals_11.yaml",
+  "policy_ids": [
+    "online_skip25_final"
+  ],
+  "policy_layers": {
+    "online_skip25_final": 24
+  },
+  "num_scenarios": 7,
+  "num_counterfactuals": 11,
+  "output_dir": "/home/geney/Craftax_Baselines/analysis/qualitative_text_counterfactual/20260226_154736",
+  "vllm_url": "http://127.0.0.1:32480",
+  "served_model": "./configs/vllm_hidden_qwen4b"
+}

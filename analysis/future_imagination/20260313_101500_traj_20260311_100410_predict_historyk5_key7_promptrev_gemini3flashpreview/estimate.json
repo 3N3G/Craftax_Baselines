@@ -1,0 +1,38 @@
+{
+  "selected_timesteps": 7,
+  "run_specs": 1,
+  "total_calls": 7,
+  "prompt_chars_total": 72383,
+  "prompt_tokens_rough_total": 18096,
+  "per_run": {
+    "predict_history_k5": {
+      "num_calls": 7,
+      "prompt_chars_total": 72383,
+      "prompt_chars_mean": 10340.42857142857,
+      "prompt_tokens_rough_total": 18096,
+      "prompt_tokens_rough_mean": 2585.1071428571427
+    }
+  },
+  "trajectory_dir": "/home/geney/Craftax_Baselines/play_data/trajectory_records/traj_20260311_100410",
+  "trajectory_id": "traj_20260311_100410",
+  "selection": {
+    "mode": "explicit_only",
+    "start_t": 0,
+    "end_t": 0,
+    "stride": 1,
+    "max_states": null,
+    "include_terminal_t": false,
+    "explicit_timesteps": [
+      0,
+      283,
+      298,
+      2180,
+      2195,
+      1310,
+      1450
+    ]
+  },
+  "provider": "gemini",
+  "model": "gemini-3-flash-preview",
+  "dry_run": false
+}

@@ -1,0 +1,28 @@
+[
+  {
+    "model": "configs/vllm_hidden_qwen4b",
+    "variant": "predict_history_k5",
+    "calls": 7,
+    "ok_calls": 7,
+    "error_calls": 0,
+    "request_mean_s": 4.943137142857143,
+    "request_p50_s": 5.212421,
+    "request_p90_s": 5.2473171999999995,
+    "hidden_mean_s": 0.0006602857142857143,
+    "total_with_hidden_mean_s": 4.943797428571428,
+    "completion_tokens_mean": 256
+  },
+  {
+    "model": "configs/vllm_hidden_qwen4b",
+    "variant": "predict_state_only",
+    "calls": 7,
+    "ok_calls": 7,
+    "error_calls": 0,
+    "request_mean_s": 3.9220514285714287,
+    "request_p50_s": 4.103981,
+    "request_p90_s": 4.1110966,
+    "hidden_mean_s": 0.00041385714285714284,
+    "total_with_hidden_mean_s": 3.922465285714286,
+    "completion_tokens_mean": 246.28571428571428
+  }
+]

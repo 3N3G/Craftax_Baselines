@@ -1,0 +1,83 @@
+You are forecasting a plausible future for a Craftax state.
+You are NOT given the true future trajectory.
+
+Use these game rules:
+1) Coordinates are (Row, Column), centered on the player at (0,0).
+   - Negative Row = UP, Positive Row = DOWN.
+   - Negative Column = LEFT, Positive Column = RIGHT.
+2) Intrinsics: Health, Food, Drink, Energy, Mana.
+   - Food/Drink/Energy naturally decay.
+   - If Food/Drink/Energy reaches 0, Health tends to decay.
+   - If Food/Drink/Energy are maintained, Health can recover.
+And these general game progression patterns:
+1) Progression: find ladder and descend floors.
+   - Overworld can descend directly.
+   - On deeper floors ladders generally open after enough kills (usually 8).
+2) Core loops:
+   - survival loop (stabilize intrinsics first)
+   - resource loop (wood/stone/ore -> tools/weapons/armor)
+   - progression loop (explore, clear threats, descend)
+Note that this game has uncertainty: where mobs spawn, what the map looks like beyond the current observation, etc. Prefer plausible trajectories over brittle exact claims, but make specific claims. Broad general predictions are not useful.
+
+Forecasting style requirements:
+- Stay grounded in the provided state.
+- Mention uncertainty when appropriate (e.g., "likely", "plausibly", "if no interruption").
+- Be concise and information-dense: avoid repetition and filler.
+- Keep the event list focused (typically 3-6 events) unless a longer list is clearly necessary.
+- Keep the trajectory summary short (typically one compact paragraph; use two only when major phase changes occur).
+
+Trajectory: traj_20260311_100410
+Current timestep: 1450 / 2334
+
+Current state (filtered observation):
+Map (interesting tiles only): -5, -4:wall, -4, -4:wall, -3, -4:path, -2, -4:wall, -1, -4:wall, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:wall, -3, -3:path, -2, -3:wall, -1, -3:darkness, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:darkness, -4, -2:wall, -3, -2:path, -2, -2:wall, -1, -2:darkness, 0, -2:darkness, 1, -2:darkness, 2, -2:darkness, 3, -2:darkness, 4, -2:darkness, 5, -2:darkness, -5, -1:darkness, -4, -1:wall_moss, -3, -1:path, -2, -1:wall, -1, -1:wall, 0, -1:wall, 1, -1:wall_moss, 2, -1:wall, 3, -1:wall, 4, -1:wall, 5, -1:wall, -5, 0:darkness, -4, 0:wall, -3, 0:torch on path, -2, 0:path, -1, 0:path, 0, 0:path, 1, 0:path, 2, 0:path, 3, 0:torch on path, 4, 0:path, 5, 0:path, -5, 1:darkness, -4, 1:wall, -3, 1:path, -2, 1:path, -1, 1:path, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:path, 4, 1:wall, 5, 1:wall, -5, 2:darkness, -4, 2:wall, -3, 2:path, -2, 2:path, -1, 2:path, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:wall, 5, 2:darkness, -5, 3:darkness, -4, 3:wall, -3, 3:path, -2, 3:fountain, -1, 3:path, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:wall, 5, 3:darkness, -5, 4:darkness, -4, 4:wall_moss, -3, 4:path, -2, 4:path, -1, 4:path, 0, 4:path, 1, 4:path, 2, 4:path, 3, 4:path, 4, 4:wall, 5, 4:darkness
+Inventory:
+Wood: 5
+Stone: 16
+Coal: 2
+Iron: 0
+Diamond: 1
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 20
+Arrow: 1
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 3
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 7.0
+Food: 9
+Drink: 8
+Energy: 7
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.23758703470230103
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: True
+Is Boss Vulnerable: False
+
+Example A (desired format only):
+Headline: Early resource setup before first meaningful progression.
+
+Meaningful events (ordered):
+1. [t+1 to t+6] The player likely gathers the three stones to the left using the wooden pickaxe. 
+2. [t+7 to t+18] The player may either look for their crafting table or place a new one and craft a stone pickaxe. 
+3. [t+19+] Exploration likely broadens toward progression targets (ladder/hostiles), unless intrinsics dip first.
+
+Trajectory summary:
+The near future is likely dominated by low-risk resource collection and setup. If no nearby threat interrupts, the player should transition from basic gathering toward tool upgrades and exploratory movement for progression. Timing can vary with map layout and stochastic encounters.

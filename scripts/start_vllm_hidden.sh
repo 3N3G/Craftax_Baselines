@@ -36,7 +36,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-TMP_ROOT="${VLLM_TMP_ROOT:-/tmp/${USER:-$(id -un)}/craftax_vllm}"
+if [[ -n "${VLLM_TMP_ROOT:-}" ]]; then
+    TMP_ROOT="${VLLM_TMP_ROOT}"
+else
+    TMP_ROOT=""
+    CANDIDATES=(
+        "${SLURM_TMPDIR:-}/craftax_vllm"
+        "/scratch/${USER:-$(id -un)}/craftax_vllm"
+        "/data/user_data/${USER:-$(id -un)}/scratch/craftax_vllm"
+        "/tmp/${USER:-$(id -un)}/craftax_vllm"
+    )
+    for candidate in "${CANDIDATES[@]}"; do
+        [[ -z "${candidate}" || "${candidate}" == "/craftax_vllm" ]] && continue
+        if mkdir -p "${candidate}" >/dev/null 2>&1; then
+            TMP_ROOT="${candidate}"
+            break
+        fi
+    done
+    if [[ -z "${TMP_ROOT}" ]]; then
+        echo "ERROR: unable to allocate VLLM tmp root from known candidates"
+        exit 1
+    fi
+fi
+export VLLM_TMP_ROOT="${TMP_ROOT}"
 STORAGE_PATH="${TMP_ROOT}/hidden_states"
 CONFIG_SRC="./configs/vllm_hidden_qwen4b"
 CONFIG_DIR="${TMP_ROOT}/vllm_hidden_qwen4b"

@@ -13,10 +13,13 @@ Verification modes:
 """
 
 import argparse
+import errno
 import glob
 import json
 import os
 import pickle
+import shutil
+import signal
 import sys
 from collections import deque
 from datetime import datetime
@@ -38,7 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import re
 import time
-from typing import Dict, NamedTuple, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 from dataclasses import dataclass
 
 import jax
@@ -58,10 +61,30 @@ from utils.wrappers import LogWrapper, AutoResetEnvWrapper, BatchEnvWrapper
 from models.actor_critic import ActorCritic, ActorCriticAug
 
 # Import text processing and vLLM interface
-from utils.llm_prompts import filter_text_obs
+from utils.llm_prompts import (
+    create_prompt,
+    filter_text_obs,
+    get_generation_prefix,
+    get_prompt_outline,
+    get_system_prompt,
+)
 from utils.llm_extractor import VLLMHiddenStateExtractor
 from labelling.obs_to_text import obs_to_text
 import requests
+
+
+TERMINATION_REQUESTED = False
+TERMINATION_SIGNAL = None
+
+
+def _signal_handler(signum, _frame):
+    global TERMINATION_REQUESTED, TERMINATION_SIGNAL
+    TERMINATION_REQUESTED = True
+    TERMINATION_SIGNAL = signum
+    print(
+        f"\nReceived signal {signum}; will checkpoint and exit at the next safe boundary.",
+        flush=True,
+    )
 
 
 # =============================================================================
@@ -97,6 +120,182 @@ class Config:
     WANDB_PROJECT: str = "craftax-online-rl-llm"
     WANDB_ENTITY: str = "iris-sobolmark"
 
+
+SYMBOLIC_MAP_DIM = 8217
+SYMBOLIC_AUX_DIM = 51
+SYMBOLIC_OBS_DIM = SYMBOLIC_MAP_DIM + SYMBOLIC_AUX_DIM
+
+
+def _extract_step_from_text(text: str) -> int:
+    m = re.search(r"_step(\d+)", text)
+    if m is None:
+        return -1
+    return int(m.group(1))
+
+
+class TrajectoryWriter:
+    def __init__(
+        self,
+        enabled: bool,
+        save_dir: Optional[str],
+        save_every_updates: int,
+        min_free_gb: float,
+        run_name: str,
+        schema: str = "minimal_core",
+    ):
+        self.enabled = bool(enabled)
+        self.save_dir = os.path.expanduser(save_dir) if save_dir else None
+        self.save_every_updates = max(1, int(save_every_updates))
+        self.min_free_bytes = int(float(min_free_gb) * (1024 ** 3))
+        self.run_name = run_name
+        self.schema = schema
+        self._disabled_reason = None
+        self._disable_logged_at_update = -1
+        self._next_batch_idx = 0
+        if self.enabled and self.save_dir:
+            os.makedirs(self.save_dir, exist_ok=True)
+
+    def _free_bytes(self) -> int:
+        if not self.save_dir:
+            return 0
+        stat = shutil.disk_usage(self.save_dir)
+        return int(stat.free)
+
+    def _disable(self, reason: str, update_idx: int):
+        if self._disabled_reason is None:
+            self._disabled_reason = reason
+            marker = {
+                "disabled": True,
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+                "run_name": self.run_name,
+            }
+            if self.save_dir:
+                marker_path = os.path.join(
+                    self.save_dir, f"{self.run_name}_trajectory_disabled.json"
+                )
+                try:
+                    with open(marker_path, "w", encoding="utf-8") as f:
+                        json.dump(marker, f, indent=2, sort_keys=True)
+                except Exception:
+                    pass
+        # Keep reminders sparse but visible. Always log the first disable event.
+        if self._disable_logged_at_update < 0 or update_idx - self._disable_logged_at_update >= 100:
+            print(
+                "[trajectory] DISABLED permanently for this run segment: "
+                f"{self._disabled_reason} (update={update_idx}). "
+                "Future trajectory writes will be skipped.",
+                flush=True,
+            )
+            self._disable_logged_at_update = update_idx
+
+    def export_state(self) -> Dict:
+        return {
+            "enabled": bool(self.enabled),
+            "save_dir": self.save_dir,
+            "save_every_updates": int(self.save_every_updates),
+            "min_free_bytes": int(self.min_free_bytes),
+            "run_name": self.run_name,
+            "schema": self.schema,
+            "disabled_reason": self._disabled_reason,
+            "next_batch_idx": int(self._next_batch_idx),
+        }
+
+    @classmethod
+    def from_state(cls, state: Dict):
+        writer = cls(
+            enabled=bool(state.get("enabled", False)),
+            save_dir=state.get("save_dir"),
+            save_every_updates=int(state.get("save_every_updates", 1)),
+            min_free_gb=float(state.get("min_free_bytes", 0)) / (1024 ** 3),
+            run_name=state.get("run_name", "run"),
+            schema=state.get("schema", "minimal_core"),
+        )
+        writer._disabled_reason = state.get("disabled_reason")
+        writer._next_batch_idx = int(state.get("next_batch_idx", 0))
+        return writer
+
+    def _pack_obs(self, obs: np.ndarray) -> Dict[str, np.ndarray]:
+        obs_flat = np.asarray(obs)
+        if obs_flat.ndim != 2:
+            obs_flat = obs_flat.reshape(obs_flat.shape[0], -1)
+        if obs_flat.shape[1] != SYMBOLIC_OBS_DIM:
+            return {"obs": obs_flat.astype(np.float16, copy=False), "obs_packed": np.array(0, dtype=np.uint8)}
+
+        map_part = obs_flat[:, :SYMBOLIC_MAP_DIM]
+        aux_part = obs_flat[:, SYMBOLIC_MAP_DIM:]
+        rounded = np.rint(map_part)
+        # Pack only if the map slice is binary to avoid lossy conversion.
+        is_binary = np.max(np.abs(map_part - rounded)) < 1e-5
+        payload = {"obs_aux": aux_part.astype(np.float16, copy=False)}
+        if is_binary:
+            bits = rounded.astype(np.uint8, copy=False)
+            payload["obs_map_bits"] = np.packbits(bits, axis=1, bitorder="little")
+            payload["obs_packed"] = np.array(1, dtype=np.uint8)
+        else:
+            payload["obs_map"] = map_part.astype(np.float16, copy=False)
+            payload["obs_packed"] = np.array(0, dtype=np.uint8)
+        return payload
+
+    def maybe_save(self, traj_batch, update_idx: int, total_steps: int):
+        if not self.enabled:
+            return
+        if self._disabled_reason is not None:
+            self._disable(self._disabled_reason, update_idx)
+            return
+        if (update_idx + 1) % self.save_every_updates != 0:
+            return
+        if not self.save_dir:
+            self._disable("missing save_dir", update_idx)
+            return
+
+        free_bytes = self._free_bytes()
+        if free_bytes < self.min_free_bytes:
+            self._disable(
+                f"free space {free_bytes / (1024 ** 3):.1f}GB below floor "
+                f"{self.min_free_bytes / (1024 ** 3):.1f}GB",
+                update_idx,
+            )
+            return
+
+        batch_data = {
+            "action": np.asarray(jax.device_get(traj_batch.action), dtype=np.int16).reshape(-1),
+            "reward": np.asarray(jax.device_get(traj_batch.reward), dtype=np.float16).reshape(-1),
+            "done": np.asarray(jax.device_get(traj_batch.done), dtype=np.uint8).reshape(-1),
+        }
+
+        obs_flat = np.asarray(jax.device_get(traj_batch.obs))
+        obs_flat = obs_flat.reshape(-1, obs_flat.shape[-1])
+        batch_data.update(self._pack_obs(obs_flat))
+
+        if hasattr(traj_batch, "hidden_state"):
+            hidden = np.asarray(jax.device_get(traj_batch.hidden_state))
+            hidden = hidden.reshape(-1, hidden.shape[-1]).astype(np.float16, copy=False)
+            batch_data["hidden_state"] = hidden
+
+        batch_data["obs_dim"] = np.array(SYMBOLIC_OBS_DIM, dtype=np.int32)
+        batch_data["obs_map_dim"] = np.array(SYMBOLIC_MAP_DIM, dtype=np.int32)
+        batch_data["obs_aux_dim"] = np.array(SYMBOLIC_AUX_DIM, dtype=np.int32)
+
+        out_path = os.path.join(
+            self.save_dir,
+            f"{self.run_name}_traj_step{int(total_steps):012d}_batch{self._next_batch_idx:06d}.npz",
+        )
+        try:
+            np.savez_compressed(out_path, **batch_data)
+            self._next_batch_idx += 1
+            print(
+                f"[trajectory] saved batch={self._next_batch_idx} step={total_steps} "
+                f"path={out_path}",
+                flush=True,
+            )
+        except OSError as exc:
+            if exc.errno == errno.ENOSPC:
+                self._disable("no space left on device; disabling future writes", update_idx)
+            else:
+                self._disable(f"OSError while saving trajectories: {exc}", update_idx)
+        except Exception as exc:
+            self._disable(f"unexpected error while saving trajectories: {exc}", update_idx)
 
 # =============================================================================
 # Transition storage for PPO
@@ -213,6 +412,104 @@ def _explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     if var_y < 1e-8:
         return 0.0
     return float(1.0 - np.var(y_true - y_pred) / var_y)
+
+
+def _truncate_log_text(text: str, max_chars: int) -> str:
+    if not text:
+        return ""
+    cleaned = text.replace("\r", "")
+    if max_chars <= 0 or len(cleaned) <= max_chars:
+        return cleaned
+    if max_chars <= 3:
+        return cleaned[:max_chars]
+    return cleaned[: max_chars - 3] + "..."
+
+
+def _build_cot_samples(
+    text_observations: List[str],
+    generated_texts: List[str],
+    tokenizer,
+    system_prompt: str,
+    prompt_variant: str,
+    generation_prefix: str,
+    max_samples: int,
+    max_chars: int,
+) -> List[Dict[str, str]]:
+    if not generated_texts or not text_observations or max_samples <= 0:
+        return []
+
+    n = min(len(generated_texts), len(text_observations))
+    sample_count = min(max_samples, n)
+    if sample_count <= 0:
+        return []
+
+    if sample_count == 1:
+        sample_indices = [0]
+    else:
+        sample_indices = np.linspace(0, n - 1, num=sample_count, dtype=np.int32).tolist()
+
+    deduped_indices: List[int] = []
+    seen = set()
+    for idx in sample_indices:
+        idx_int = int(idx)
+        if idx_int in seen:
+            continue
+        seen.add(idx_int)
+        deduped_indices.append(idx_int)
+
+    samples: List[Dict[str, str]] = []
+    for env_idx in deduped_indices:
+        response_text = generated_texts[env_idx] or ""
+        full_prompt = create_prompt(
+            text_observations[env_idx],
+            tokenizer,
+            system_prompt=system_prompt,
+            prompt_variant=prompt_variant,
+        )
+        if generation_prefix:
+            full_prompt += generation_prefix
+        samples.append(
+            {
+                "prompt": _truncate_log_text(full_prompt, max_chars),
+                "response": _truncate_log_text(response_text, max_chars),
+            }
+        )
+    return samples
+
+
+def _cot_samples_to_wandb_payload(samples: List[Dict[str, str]]) -> Dict[str, object]:
+    payload: Dict[str, object] = {}
+    for idx, sample in enumerate(samples):
+        payload[f"cot/sample_{idx}_prompt"] = str(sample.get("prompt", ""))
+        payload[f"cot/sample_{idx}_response"] = str(sample.get("response", ""))
+    return payload
+
+
+def _append_jsonl_record(path: str, payload: Dict[str, object]) -> bool:
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, sort_keys=True, ensure_ascii=True) + "\n")
+        return True
+    except Exception as exc:
+        print(f"[cot-log] WARNING: failed to append to {path}: {exc}", flush=True)
+        return False
+
+
+def _cot_log_due_for_update(
+    update_idx_1based: int,
+    first_updates: int,
+    interval_updates: int,
+) -> bool:
+    if update_idx_1based <= 0:
+        return False
+    if first_updates > 0 and update_idx_1based <= first_updates:
+        return True
+    if interval_updates <= 0:
+        return False
+    return (update_idx_1based - max(0, first_updates)) % interval_updates == 0
 
 
 def _maybe_save_policy(
@@ -372,8 +669,28 @@ def render_craftax_text_swapped(state):
 # =============================================================================
 
 class LLMHiddenStateManager:
-    def __init__(self, model_id: str = Config.MODEL_ID, target_layer: int = -1, tokens_to_generate: int = 1):
+    def __init__(
+        self,
+        model_id: str = Config.MODEL_ID,
+        target_layer: int = -1,
+        tokens_to_generate: int = 1,
+        prompt_variant: str = "default",
+        hidden_pooling: str = "last_token",
+        hidden_pooling_k: int = 8,
+        temperature: float = 0.7,
+        log_cot_text: bool = False,
+        cot_log_samples: int = 2,
+        cot_log_max_chars: int = 512,
+    ):
         self.tokens_to_generate = tokens_to_generate
+        self.temperature = temperature
+        self.prompt_variant = (prompt_variant or "default").strip().lower()
+        self.system_prompt = get_system_prompt(self.prompt_variant)
+        self.prompt_outline = get_prompt_outline(self.prompt_variant)
+        self.generation_prefix = get_generation_prefix(self.prompt_variant)
+        self.log_cot_text = bool(log_cot_text and tokens_to_generate > 1)
+        self.cot_log_samples = max(1, int(cot_log_samples))
+        self.cot_log_max_chars = max(0, int(cot_log_max_chars))
         vllm_url = os.environ.get("VLLM_URL", "http://localhost:8000").rstrip("/")
         try:
             resp = requests.get(f"{vllm_url}/health", timeout=2)
@@ -390,11 +707,25 @@ class LLMHiddenStateManager:
         extracted_layers = [8, 16, 24, 35]
         layer_index = -1 if target_layer == -1 else (extracted_layers.index(target_layer) if target_layer in extracted_layers else -1)
 
-        self.llm = VLLMHiddenStateExtractor(server_url=vllm_url, model_name=model_name, model_id=model_id, target_layer=layer_index)
+        self.llm = VLLMHiddenStateExtractor(
+            server_url=vllm_url,
+            model_name=model_name,
+            model_id=model_id,
+            target_layer=layer_index,
+            hidden_pooling=hidden_pooling,
+            hidden_pooling_k=hidden_pooling_k,
+            prompt_variant=self.prompt_variant,
+            system_prompt=self.system_prompt,
+        )
         self.hidden_size = self.llm.hidden_size
         print(f"   Hidden size: {self.hidden_size}")
+        print(f"   Prompt variant: {self.prompt_variant}")
 
-    def extract(self, obs_batch: jnp.ndarray, num_envs: int) -> Tuple[jnp.ndarray, Dict]:
+    def extract(
+        self,
+        obs_batch: jnp.ndarray,
+        num_envs: int,
+    ) -> Tuple[jnp.ndarray, Dict[str, float], Optional[List[Dict[str, str]]]]:
         t_start = time.perf_counter()
         # Convert once to host and decode text from symbolic observations.
         # This is dramatically faster than render_craftax_text(state) on per-env state objects.
@@ -402,18 +733,47 @@ class LLMHiddenStateManager:
         text_observations = []
         for i in range(num_envs):
             raw_text = obs_to_text(obs_host[i])
-            filtered_text = filter_text_obs(raw_text)
+            # Hard fail on malformed interesting-map coordinates so training does
+            # not silently continue with corrupted prompt geometry.
+            filtered_text = filter_text_obs(raw_text, strict_map_validation=True)
             text_observations.append(filtered_text)
         t_text = time.perf_counter() - t_start
 
         t_llm_start = time.perf_counter()
+        cot_samples = None
         if self.tokens_to_generate == 1:
             hidden_np, llm_metrics = self.llm.extract_hidden_states_no_cot(text_observations)
         else:
-            hidden_np, _, llm_metrics = self.llm.extract_hidden_states(text_observations, batch_size=min(32, len(text_observations)), max_new_tokens=self.tokens_to_generate)
+            hidden_np, generated_texts, llm_metrics = self.llm.extract_hidden_states(
+                text_observations,
+                batch_size=min(32, len(text_observations)),
+                max_new_tokens=self.tokens_to_generate,
+                temperature=self.temperature,
+            )
+            if generated_texts:
+                lengths = np.asarray([len(t or "") for t in generated_texts], dtype=np.float32)
+                if lengths.size > 0:
+                    llm_metrics["llm/generated_chars_mean"] = float(lengths.mean())
+                    llm_metrics["llm/generated_chars_max"] = float(lengths.max())
+                    llm_metrics["llm/generated_chars_min"] = float(lengths.min())
+            if self.log_cot_text:
+                cot_samples = _build_cot_samples(
+                    text_observations,
+                    generated_texts,
+                    tokenizer=self.llm.tokenizer,
+                    system_prompt=self.system_prompt,
+                    prompt_variant=self.prompt_variant,
+                    generation_prefix=self.generation_prefix,
+                    max_samples=self.cot_log_samples,
+                    max_chars=self.cot_log_max_chars,
+                )
         t_llm = time.perf_counter() - t_llm_start
 
-        return jnp.asarray(hidden_np), {"timing/text_render_ms": t_text * 1000, "timing/llm_inference_ms": t_llm * 1000, **llm_metrics}
+        return jnp.asarray(hidden_np), {
+            "timing/text_render_ms": t_text * 1000,
+            "timing/llm_inference_ms": t_llm * 1000,
+            **llm_metrics,
+        }, cot_samples
 
 
 # =============================================================================
@@ -667,11 +1027,19 @@ def run_training_no_llm(
     else:
         next_checkpoint_step = None
 
+    final_update_idx = start_update_idx
     for update_idx in range(start_update_idx, config["NUM_UPDATES"]):
+        if TERMINATION_REQUESTED:
+            print(
+                f"Termination requested before update {update_idx}; exiting loop.",
+                flush=True,
+            )
+            break
         carry = (train_state, env_state, obs, rng)
         carry, traj_batch = jax.lax.scan(_env_step, carry, None, num_steps)
         train_state, env_state, obs, rng = carry
         total_steps += num_steps * num_envs
+        final_update_idx = update_idx + 1
 
         rng, update_rng = jax.random.split(rng)
         train_state, rng, loss_info = _ppo_update(train_state, traj_batch, obs, update_rng)
@@ -768,7 +1136,12 @@ def run_training_no_llm(
 
     total_time = time.perf_counter() - start_time
     final_return = float(np.mean(episode_returns)) if episode_returns else 0
-    final_metrics = {"sps": total_steps/total_time, "final_return": final_return}
+    final_metrics = {
+        "sps": total_steps / max(total_time, 1e-6),
+        "final_return": final_return,
+        "terminated_by_signal": bool(TERMINATION_REQUESTED),
+        "termination_signal": TERMINATION_SIGNAL,
+    }
     if save_policy:
         save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics, run_metadata)
         print(f"Saved policy checkpoint: {save_path}")
@@ -777,7 +1150,7 @@ def run_training_no_llm(
             "mode": "no_llm",
             "run_name": run_name,
             "total_steps": int(total_steps),
-            "update_idx": int(config["NUM_UPDATES"]),
+            "update_idx": int(final_update_idx),
             "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
             "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
             "obs": np.asarray(jax.device_get(obs)),
@@ -790,6 +1163,8 @@ def run_training_no_llm(
             if lifetime_slot_unlocked is None
             else np.asarray(lifetime_slot_unlocked, dtype=bool),
             "saved_policy_path": save_path,
+            "terminated_by_signal": bool(TERMINATION_REQUESTED),
+            "termination_signal": TERMINATION_SIGNAL,
         }
         final_resume_path = _save_resumable_checkpoint(
             checkpoint_dir=effective_checkpoint_dir,
@@ -806,15 +1181,43 @@ def run_training_no_llm(
 # Training Loop - With LLM
 # =============================================================================
 
-def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_steps: int,
-                          model_id: str, target_layer: int, tokens_to_generate: int,
-                          use_wandb: bool, seed: int, verbose: bool,
-                          save_policy: bool, policy_save_dir: str, run_name: str,
-                          checkpoint_every_steps: int, checkpoint_dir: Optional[str],
-                          resume_from: Optional[str],
-                          run_metadata: Optional[Dict] = None) -> Dict:
+def run_training_with_llm(
+    num_envs: int,
+    total_timesteps: int,
+    skip_n: int,
+    num_steps: int,
+    model_id: str,
+    target_layer: int,
+    tokens_to_generate: int,
+    prompt_variant: str,
+    use_wandb: bool,
+    seed: int,
+    verbose: bool,
+    save_policy: bool,
+    policy_save_dir: str,
+    run_name: str,
+    checkpoint_every_steps: int,
+    checkpoint_dir: Optional[str],
+    resume_from: Optional[str],
+    run_metadata: Optional[Dict] = None,
+    hidden_pooling: str = "last_token",
+    hidden_pooling_k: int = 8,
+    temperature: float = 0.7,
+    save_traj_online: bool = False,
+    traj_save_dir: Optional[str] = None,
+    traj_save_every_updates: int = 50,
+    traj_free_space_min_gb: float = 150.0,
+    traj_schema: str = "minimal_core",
+    log_cot_text: bool = False,
+    cot_log_first_updates: int = 10,
+    cot_log_every_updates: int = 100,
+    cot_log_samples: int = 2,
+    cot_log_max_chars: int = 0,
+    cot_log_file: Optional[str] = None,
+) -> Dict:
     print("=" * 70)
     print(f"Online RL with LLM Hidden States (skip_n={skip_n})")
+    print(f"Prompt variant: {prompt_variant}")
     print("=" * 70)
 
     config = {
@@ -831,7 +1234,30 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     env = AutoResetEnvWrapper(env)
     env = BatchEnvWrapper(env, num_envs=num_envs)
 
-    llm_manager = LLMHiddenStateManager(model_id=model_id, target_layer=target_layer, tokens_to_generate=tokens_to_generate)
+    cot_text_logging_enabled = bool(log_cot_text and tokens_to_generate > 1)
+    if log_cot_text and tokens_to_generate <= 1:
+        print("CoT text logging requested but disabled because --tokens <= 1.")
+    if cot_text_logging_enabled:
+        print(
+            f"CoT text logging: enabled (updates 1..{cot_log_first_updates}, "
+            f"then every {cot_log_every_updates}, "
+            f"samples={cot_log_samples}, max_chars={cot_log_max_chars})"
+        )
+        if cot_log_file:
+            print(f"CoT text local mirror: {cot_log_file}")
+
+    llm_manager = LLMHiddenStateManager(
+        model_id=model_id,
+        target_layer=target_layer,
+        tokens_to_generate=tokens_to_generate,
+        prompt_variant=prompt_variant,
+        hidden_pooling=hidden_pooling,
+        hidden_pooling_k=hidden_pooling_k,
+        temperature=temperature,
+        log_cot_text=cot_text_logging_enabled,
+        cot_log_samples=cot_log_samples,
+        cot_log_max_chars=cot_log_max_chars,
+    )
 
     network = ActorCriticAug(
         action_dim=env.action_space(env_params).n,
@@ -874,6 +1300,16 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     last_log_update, last_log_llm_calls = 0, 0
     lifetime_any_unlocked = None
     lifetime_slot_unlocked = None
+    trajectory_writer = TrajectoryWriter(
+        enabled=save_traj_online,
+        save_dir=traj_save_dir,
+        save_every_updates=traj_save_every_updates,
+        min_free_gb=traj_free_space_min_gb,
+        run_name=run_name,
+        schema=traj_schema,
+    )
+    latest_cot_samples: Optional[List[Dict[str, str]]] = None
+    cot_log_file_disabled = False
 
     if resume_from:
         payload, resume_path = _load_resumable_checkpoint(resume_from)
@@ -898,6 +1334,11 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
             lifetime_any_unlocked = np.asarray(payload["lifetime_any_unlocked"]).astype(bool)
         if payload.get("lifetime_slot_unlocked") is not None:
             lifetime_slot_unlocked = np.asarray(payload["lifetime_slot_unlocked"]).astype(bool)
+        if payload.get("trajectory_writer_state") is not None:
+            trajectory_writer = TrajectoryWriter.from_state(payload["trajectory_writer_state"])
+            if traj_save_dir:
+                trajectory_writer.save_dir = os.path.expanduser(traj_save_dir)
+                os.makedirs(trajectory_writer.save_dir, exist_ok=True)
         print(
             f"Resumed from {resume_path}: total_steps={total_steps}, llm_calls={llm_calls}, "
             f"start_update={start_update_idx}/{config['NUM_UPDATES']}"
@@ -913,16 +1354,58 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
     else:
         next_checkpoint_step = None
 
+    def _save_resume(update_idx: int, saved_policy_path: Optional[str], intermediate: bool):
+        resume_payload = {
+            "mode": "with_llm",
+            "run_name": run_name,
+            "total_steps": int(total_steps),
+            "update_idx": int(update_idx),
+            "llm_calls": int(llm_calls),
+            "steps_since_llm": int(steps_since_llm),
+            "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
+            "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
+            "obs": np.asarray(jax.device_get(obs)),
+            "rng": np.asarray(jax.device_get(rng)),
+            "hidden_states": np.asarray(jax.device_get(hidden_states)),
+            "episode_returns_tail": list(episode_returns),
+            "lifetime_any_unlocked": None
+            if lifetime_any_unlocked is None
+            else np.asarray(lifetime_any_unlocked, dtype=bool),
+            "lifetime_slot_unlocked": None
+            if lifetime_slot_unlocked is None
+            else np.asarray(lifetime_slot_unlocked, dtype=bool),
+            "saved_policy_path": saved_policy_path,
+            "trajectory_writer_state": trajectory_writer.export_state(),
+            "terminated_by_signal": bool(TERMINATION_REQUESTED),
+            "termination_signal": TERMINATION_SIGNAL,
+            "intermediate": bool(intermediate),
+        }
+        return _save_resumable_checkpoint(
+            checkpoint_dir=effective_checkpoint_dir,
+            run_name=run_name,
+            payload=resume_payload,
+        )
+
+    final_update_idx = start_update_idx
     for update_idx in range(start_update_idx, config["NUM_UPDATES"]):
+        if TERMINATION_REQUESTED:
+            print(
+                f"Termination requested before update {update_idx}; exiting loop.",
+                flush=True,
+            )
+            break
+
         llm_metrics = {}
         steps_collected = 0
         all_transitions = []
 
         while steps_collected < num_steps:
             if steps_since_llm >= skip_n:
-                hidden_states, llm_metrics = llm_manager.extract(obs, num_envs)
+                hidden_states, llm_metrics, cot_samples = llm_manager.extract(obs, num_envs)
                 steps_since_llm = 0
                 llm_calls += 1
+                if cot_samples:
+                    latest_cot_samples = cot_samples
 
             steps_this_chunk = min(skip_n - steps_since_llm, num_steps - steps_collected)
             steps_this_chunk = max(1, steps_this_chunk)
@@ -941,9 +1424,11 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
 
         traj_batch = jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=0), *all_transitions)
         total_steps += num_steps * num_envs
+        final_update_idx = update_idx + 1
 
         rng, update_rng = jax.random.split(rng)
         train_state, rng, loss_info = _ppo_update(train_state, traj_batch, obs, hidden_states, update_rng)
+        trajectory_writer.maybe_save(traj_batch, update_idx, total_steps)
 
         completed_mask = traj_batch.info["returned_episode"].flatten()
         completed_returns = traj_batch.info["returned_episode_returns"].flatten()[completed_mask]
@@ -951,44 +1436,59 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
             for ret in completed_returns.tolist():
                 episode_returns.append(float(ret))
 
+        current_update_idx = update_idx + 1
+        perf_log_due = (current_update_idx % 10) == 0
+        cot_log_due = (
+            cot_text_logging_enabled
+            and latest_cot_samples is not None
+            and _cot_log_due_for_update(
+                current_update_idx,
+                first_updates=max(0, int(cot_log_first_updates)),
+                interval_updates=max(1, int(cot_log_every_updates)),
+            )
+        )
         current_time = time.perf_counter()
-        if (update_idx + 1) % 10 == 0:
+        if perf_log_due or cot_log_due:
             elapsed = current_time - last_log_time
             step_delta = total_steps - last_log_steps
-            update_delta = (update_idx + 1) - last_log_update
+            update_delta = current_update_idx - last_log_update
             llm_delta = llm_calls - last_log_llm_calls
-            sps = step_delta / elapsed
-            updates_per_sec = update_delta / elapsed
-            llm_calls_per_sec = llm_delta / elapsed if elapsed > 0 else 0.0
-            steps_per_llm_call = step_delta / max(llm_delta, 1)
-            episode_metrics = _extract_episode_metrics(traj_batch.info)
-            achievement_metrics, lifetime_any_unlocked, lifetime_slot_unlocked = _extract_achievement_metrics(
-                env_state, lifetime_any_unlocked, lifetime_slot_unlocked
-            )
-            loss_metrics = _extract_loss_metrics(loss_info)
-            targets_np = np.asarray(jax.device_get(traj_batch.reward + (config["GAMMA"] * traj_batch.value * (1 - traj_batch.done))))
-            values_np = np.asarray(jax.device_get(traj_batch.value))
-            perf_metrics = {
-                "perf/updates_per_sec": updates_per_sec,
-                "perf/llm_calls_per_sec": llm_calls_per_sec,
-                "perf/steps_per_llm_call": steps_per_llm_call,
-                "train/explained_variance": _explained_variance(values_np.reshape(-1), targets_np.reshape(-1)),
-            }
-            mean_return = episode_metrics.get("train/episode_return", 0.0)
-            text_ms = llm_metrics.get("timing/text_render_ms")
-            llm_ms = llm_metrics.get("timing/llm_inference_ms")
-            timing_suffix = ""
-            if text_ms is not None and llm_ms is not None:
-                timing_suffix = f" | TextMS: {text_ms:.1f} | LLMMS: {llm_ms:.1f}"
-            if verbose:
-                print(
-                    f"Update {update_idx+1:4d}/{config['NUM_UPDATES']} | Steps: {total_steps:,} "
-                    f"| SPS: {sps:,.0f} | Return: {mean_return:.1f} | LLM: {llm_calls}{timing_suffix}"
+            log_payload = {"timestep": total_steps}
+            if perf_log_due:
+                sps = step_delta / elapsed
+                updates_per_sec = update_delta / elapsed
+                llm_calls_per_sec = llm_delta / elapsed if elapsed > 0 else 0.0
+                steps_per_llm_call = step_delta / max(llm_delta, 1)
+                episode_metrics = _extract_episode_metrics(traj_batch.info)
+                achievement_metrics, lifetime_any_unlocked, lifetime_slot_unlocked = _extract_achievement_metrics(
+                    env_state, lifetime_any_unlocked, lifetime_slot_unlocked
                 )
-            if use_wandb:
-                wandb.log(
+                loss_metrics = _extract_loss_metrics(loss_info)
+                targets_np = np.asarray(
+                    jax.device_get(
+                        traj_batch.reward + (config["GAMMA"] * traj_batch.value * (1 - traj_batch.done))
+                    )
+                )
+                values_np = np.asarray(jax.device_get(traj_batch.value))
+                perf_metrics = {
+                    "perf/updates_per_sec": updates_per_sec,
+                    "perf/llm_calls_per_sec": llm_calls_per_sec,
+                    "perf/steps_per_llm_call": steps_per_llm_call,
+                    "train/explained_variance": _explained_variance(values_np.reshape(-1), targets_np.reshape(-1)),
+                }
+                mean_return = episode_metrics.get("train/episode_return", 0.0)
+                text_ms = llm_metrics.get("timing/text_render_ms")
+                llm_ms = llm_metrics.get("timing/llm_inference_ms")
+                timing_suffix = ""
+                if text_ms is not None and llm_ms is not None:
+                    timing_suffix = f" | TextMS: {text_ms:.1f} | LLMMS: {llm_ms:.1f}"
+                if verbose:
+                    print(
+                        f"Update {current_update_idx:4d}/{config['NUM_UPDATES']} | Steps: {total_steps:,} "
+                        f"| SPS: {sps:,.0f} | Return: {mean_return:.1f} | LLM: {llm_calls}{timing_suffix}"
+                    )
+                log_payload.update(
                     {
-                        "timestep": total_steps,
                         "perf/sps": sps,
                         "perf/llm_calls": llm_calls,
                         **episode_metrics,
@@ -996,11 +1496,45 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
                         **perf_metrics,
                         **achievement_metrics,
                         **llm_metrics,
-                    },
+                    }
+                )
+            else:
+                log_payload["perf/llm_calls"] = llm_calls
+            if cot_log_due:
+                log_payload.update(_cot_samples_to_wandb_payload(latest_cot_samples))
+                log_payload["cot/prompt_variant"] = llm_manager.prompt_variant
+                log_payload["cot/prompt_outline"] = llm_manager.prompt_outline
+            if use_wandb:
+                wandb.log(
+                    log_payload,
                     step=total_steps,
                 )
-            last_log_time, last_log_steps = current_time, total_steps
-            last_log_update, last_log_llm_calls = update_idx + 1, llm_calls
+            if cot_log_due and cot_log_file and not cot_log_file_disabled:
+                record = {
+                    "timestamp": datetime.now().isoformat(),
+                    "run_name": run_name,
+                    "update_idx": int(current_update_idx),
+                    "timestep": int(total_steps),
+                    "llm_calls": int(llm_calls),
+                    "prompt_variant": llm_manager.prompt_variant,
+                    "prompt_outline": llm_manager.prompt_outline,
+                    "samples": latest_cot_samples,
+                }
+                if not _append_jsonl_record(cot_log_file, record):
+                    cot_log_file_disabled = True
+                    print(
+                        "[cot-log] disabling local CoT mirror after write failure.",
+                        flush=True,
+                    )
+                elif verbose:
+                    print(
+                        f"[cot-log] wrote {len(latest_cot_samples)} samples "
+                        f"to {cot_log_file}",
+                        flush=True,
+                    )
+            if perf_log_due:
+                last_log_time, last_log_steps = current_time, total_steps
+                last_log_update, last_log_llm_calls = current_update_idx, llm_calls
 
         if save_policy and next_checkpoint_step is not None and total_steps >= next_checkpoint_step:
             mean_return = float(np.mean(episode_returns)) if episode_returns else 0.0
@@ -1020,74 +1554,42 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
                 summary=checkpoint_summary,
                 metadata=run_metadata,
             )
-            resume_payload = {
-                "mode": "with_llm",
-                "run_name": run_name,
-                "total_steps": int(total_steps),
-                "update_idx": int(update_idx + 1),
-                "llm_calls": int(llm_calls),
-                "steps_since_llm": int(steps_since_llm),
-                "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
-                "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
-                "obs": np.asarray(jax.device_get(obs)),
-                "rng": np.asarray(jax.device_get(rng)),
-                "hidden_states": np.asarray(jax.device_get(hidden_states)),
-                "episode_returns_tail": list(episode_returns),
-                "lifetime_any_unlocked": None
-                if lifetime_any_unlocked is None
-                else np.asarray(lifetime_any_unlocked, dtype=bool),
-                "lifetime_slot_unlocked": None
-                if lifetime_slot_unlocked is None
-                else np.asarray(lifetime_slot_unlocked, dtype=bool),
-                "saved_policy_path": policy_path,
-            }
-            resume_path = _save_resumable_checkpoint(
-                checkpoint_dir=effective_checkpoint_dir,
-                run_name=run_name,
-                payload=resume_payload,
-            )
+            resume_path = _save_resume(update_idx + 1, policy_path, intermediate=True)
             print(
                 f"Saved intermediate checkpoint at step {total_steps}: "
                 f"policy={policy_path} resume={resume_path}"
             )
             next_checkpoint_step = ((total_steps // checkpoint_every_steps) + 1) * checkpoint_every_steps
 
+        if TERMINATION_REQUESTED:
+            print(
+                f"Termination requested after update {update_idx + 1}; saving resumable checkpoint.",
+                flush=True,
+            )
+            resume_path = _save_resume(update_idx + 1, None, intermediate=True)
+            print(f"Saved termination checkpoint: {resume_path}", flush=True)
+            break
+
     total_time = time.perf_counter() - start_time
     final_return = float(np.mean(episode_returns)) if episode_returns else 0
-    final_metrics = {"sps": total_steps/total_time, "llm_calls": llm_calls, "final_return": final_return}
+    final_metrics = {
+        "sps": total_steps / max(total_time, 1e-6),
+        "llm_calls": llm_calls,
+        "final_return": final_return,
+        "terminated_by_signal": bool(TERMINATION_REQUESTED),
+        "termination_signal": TERMINATION_SIGNAL,
+    }
     if save_policy:
         save_path = _maybe_save_policy(policy_save_dir, run_name, train_state.params, final_metrics, run_metadata)
         print(f"Saved policy checkpoint: {save_path}")
         final_metrics["policy_path"] = save_path
-        final_resume_payload = {
-            "mode": "with_llm",
-            "run_name": run_name,
-            "total_steps": int(total_steps),
-            "update_idx": int(config["NUM_UPDATES"]),
-            "llm_calls": int(llm_calls),
-            "steps_since_llm": int(steps_since_llm),
-            "train_state_state": _to_host_tree(serialization.to_state_dict(train_state)),
-            "env_state_state": _to_host_tree(serialization.to_state_dict(env_state)),
-            "obs": np.asarray(jax.device_get(obs)),
-            "rng": np.asarray(jax.device_get(rng)),
-            "hidden_states": np.asarray(jax.device_get(hidden_states)),
-            "episode_returns_tail": list(episode_returns),
-            "lifetime_any_unlocked": None
-            if lifetime_any_unlocked is None
-            else np.asarray(lifetime_any_unlocked, dtype=bool),
-            "lifetime_slot_unlocked": None
-            if lifetime_slot_unlocked is None
-            else np.asarray(lifetime_slot_unlocked, dtype=bool),
-            "saved_policy_path": save_path,
-        }
-        final_resume_path = _save_resumable_checkpoint(
-            checkpoint_dir=effective_checkpoint_dir,
-            run_name=run_name,
-            payload=final_resume_payload,
-        )
+        final_resume_path = _save_resume(final_update_idx, save_path, intermediate=False)
         final_metrics["resume_path"] = final_resume_path
         print(f"Saved resumable checkpoint: {final_resume_path}")
-    print(f"\nDone. SPS: {total_steps/total_time:,.0f}, LLM calls: {llm_calls}, Return: {final_return:.1f}")
+    print(
+        f"\nDone. SPS: {total_steps / max(total_time, 1e-6):,.0f}, "
+        f"LLM calls: {llm_calls}, Return: {final_return:.1f}"
+    )
     return final_metrics
 
 
@@ -1096,6 +1598,9 @@ def run_training_with_llm(num_envs: int, total_timesteps: int, skip_n: int, num_
 # =============================================================================
 
 def main():
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
     parser = argparse.ArgumentParser(description="Online RL with LLM hidden states (Optimized JAX)")
     parser.add_argument("--envs", type=int, default=128)
     parser.add_argument("--timesteps", type=lambda x: int(float(x)), default=1e6)
@@ -1104,6 +1609,32 @@ def main():
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM (matches ppo.py)")
     parser.add_argument("--layer", type=int, default=-1)
     parser.add_argument("--tokens", type=int, default=1)
+    parser.add_argument(
+        "--prompt-variant",
+        type=str,
+        default="default",
+        choices=["default", "future_based", "future_based_opt"],
+        help="Prompt construction variant for the LLM policy context.",
+    )
+    parser.add_argument(
+        "--hidden-pooling",
+        type=str,
+        default="last_token",
+        choices=["last_token", "mean_last_k"],
+        help="How to pool token-wise hidden states from the selected layer.",
+    )
+    parser.add_argument(
+        "--hidden-pooling-k",
+        type=int,
+        default=8,
+        help="Token window size for --hidden-pooling mean_last_k.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="LLM generation temperature when --tokens > 1.",
+    )
     parser.add_argument("--model", type=str, default=Config.MODEL_ID)
     parser.add_argument("--use-wandb", action="store_true", default=True)
     parser.add_argument("--no-wandb", action="store_true")
@@ -1137,10 +1668,91 @@ def main():
         default=None,
         help="Optional explicit run name. Defaults to online-jax-{envs}env-{mode}.",
     )
+    parser.add_argument(
+        "--save-traj-online",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Save compact trajectory shards during online RL.",
+    )
+    parser.add_argument(
+        "--traj-save-dir",
+        type=str,
+        default=None,
+        help="Output directory for online trajectory shards.",
+    )
+    parser.add_argument(
+        "--traj-save-every-updates",
+        type=int,
+        default=50,
+        help="Save one trajectory shard every N PPO updates.",
+    )
+    parser.add_argument(
+        "--traj-free-space-min-gb",
+        type=float,
+        default=150.0,
+        help="Disable trajectory saving when free space drops below this threshold.",
+    )
+    parser.add_argument(
+        "--traj-schema",
+        type=str,
+        default="minimal_core",
+        choices=["minimal_core"],
+        help="Trajectory schema version.",
+    )
+    parser.add_argument(
+        "--log-cot-text",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Log sampled CoT text traces (only applies when --tokens > 1).",
+    )
+    parser.add_argument(
+        "--cot-log-every-updates",
+        type=int,
+        default=100,
+        help="After warmup logging, log CoT text every N PPO updates.",
+    )
+    parser.add_argument(
+        "--cot-log-first-updates",
+        type=int,
+        default=10,
+        help="Log CoT text on updates 1..N before switching to periodic logging.",
+    )
+    parser.add_argument(
+        "--cot-log-samples",
+        type=int,
+        default=2,
+        help="Number of env samples to log per CoT logging event.",
+    )
+    parser.add_argument(
+        "--cot-log-max-chars",
+        type=int,
+        default=0,
+        help="Max characters per CoT prompt/response field (0 disables truncation).",
+    )
+    parser.add_argument(
+        "--cot-log-file",
+        type=str,
+        default=None,
+        help="Optional JSONL mirror path for sampled CoT logs.",
+    )
     args = parser.parse_args()
 
     if args.checkpoint_every_steps < 0:
         parser.error("--checkpoint-every-steps must be >= 0")
+    if args.hidden_pooling_k <= 0:
+        parser.error("--hidden-pooling-k must be > 0")
+    if args.traj_save_every_updates <= 0:
+        parser.error("--traj-save-every-updates must be > 0")
+    if args.traj_free_space_min_gb < 0:
+        parser.error("--traj-free-space-min-gb must be >= 0")
+    if args.cot_log_every_updates <= 0:
+        parser.error("--cot-log-every-updates must be > 0")
+    if args.cot_log_first_updates < 0:
+        parser.error("--cot-log-first-updates must be >= 0")
+    if args.cot_log_samples <= 0:
+        parser.error("--cot-log-samples must be > 0")
+    if args.cot_log_max_chars < 0:
+        parser.error("--cot-log-max-chars must be >= 0")
 
     use_wandb = args.use_wandb and not args.no_wandb
     mode_str = "no-llm" if args.no_llm else f"skip{args.skip_n}"
@@ -1148,6 +1760,12 @@ def main():
     policy_save_dir = os.path.expanduser(args.policy_save_dir)
     checkpoint_dir = os.path.expanduser(args.checkpoint_dir) if args.checkpoint_dir else None
     resume_from = os.path.expanduser(args.resume_from) if args.resume_from else None
+    traj_save_dir = os.path.expanduser(args.traj_save_dir) if args.traj_save_dir else None
+    cot_log_file = os.path.expanduser(args.cot_log_file) if args.cot_log_file else None
+    if args.save_traj_online and traj_save_dir is None:
+        traj_save_dir = os.path.join(policy_save_dir, "online_traj", run_name)
+    if args.log_cot_text and cot_log_file is None:
+        cot_log_file = os.path.join(policy_save_dir, "cot_logs", f"{run_name}.jsonl")
     run_metadata = {
         "argv": vars(args),
         "run_name": run_name,
@@ -1157,6 +1775,20 @@ def main():
         "slurm_job_name": os.environ.get("SLURM_JOB_NAME"),
         "git_commit": os.environ.get("GIT_COMMIT"),
         "prompt_pipeline": "filter_text_obs(obs_to_text(symbolic_obs))",
+        "prompt_variant": args.prompt_variant,
+        "prompt_outline": get_prompt_outline(args.prompt_variant),
+        "hidden_pooling": args.hidden_pooling,
+        "hidden_pooling_k": args.hidden_pooling_k,
+        "temperature": args.temperature,
+        "save_traj_online": args.save_traj_online,
+        "traj_save_dir": traj_save_dir,
+        "traj_schema": args.traj_schema,
+        "log_cot_text": args.log_cot_text,
+        "cot_log_first_updates": args.cot_log_first_updates,
+        "cot_log_every_updates": args.cot_log_every_updates,
+        "cot_log_samples": args.cot_log_samples,
+        "cot_log_max_chars": args.cot_log_max_chars,
+        "cot_log_file": cot_log_file,
     }
     if use_wandb:
         wandb.init(project=args.wandb_project, entity=args.wandb_entity, name=run_name, config=vars(args))
@@ -1171,8 +1803,23 @@ def main():
     else:
         results = run_training_with_llm(
             args.envs, args.timesteps, args.skip_n, args.num_steps, args.model, args.layer, args.tokens,
+            args.prompt_variant,
             use_wandb, args.seed, not args.quiet,
-            args.save_policy, policy_save_dir, run_name, args.checkpoint_every_steps, checkpoint_dir, resume_from, run_metadata
+            args.save_policy, policy_save_dir, run_name, args.checkpoint_every_steps, checkpoint_dir, resume_from, run_metadata,
+            hidden_pooling=args.hidden_pooling,
+            hidden_pooling_k=args.hidden_pooling_k,
+            temperature=args.temperature,
+            save_traj_online=args.save_traj_online,
+            traj_save_dir=traj_save_dir,
+            traj_save_every_updates=args.traj_save_every_updates,
+            traj_free_space_min_gb=args.traj_free_space_min_gb,
+            traj_schema=args.traj_schema,
+            log_cot_text=args.log_cot_text,
+            cot_log_first_updates=args.cot_log_first_updates,
+            cot_log_every_updates=args.cot_log_every_updates,
+            cot_log_samples=args.cot_log_samples,
+            cot_log_max_chars=args.cot_log_max_chars,
+            cot_log_file=cot_log_file,
         )
 
     if use_wandb:

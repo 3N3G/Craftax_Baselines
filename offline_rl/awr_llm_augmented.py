@@ -43,7 +43,7 @@ class Config:
     ACTION_DIM = 43
     LAYER_WIDTH = 512
     HIDDEN_STATE_DIM = 2560  # LLM hidden state dimension
-    OBS_DIM = 1345 # Symbolic observation size (check this)
+    OBS_DIM = 8268  # Craftax symbolic observation size
     HIDDEN_MODE = "real"  # real | zero | shuffle
     ADVANTAGE_MODE = "center"  # raw | center | standardize
 
@@ -106,6 +106,30 @@ def compute_return_to_go(
         returns[t] = next_return
     truncated_streams = int(dones[-1] < 0.5)
     return returns, truncated_streams
+
+
+def decode_obs_array(data) -> np.ndarray:
+    if "obs" in data.files:
+        raw_obs = np.asarray(data["obs"])
+        if len(raw_obs.shape) > 2:
+            raw_obs = raw_obs.reshape(raw_obs.shape[0], -1)
+        return raw_obs.astype(np.float32, copy=False)
+
+    if "obs_map_bits" in data.files and "obs_aux" in data.files:
+        map_dim = int(data["obs_map_dim"]) if "obs_map_dim" in data.files else 8217
+        map_bits = np.asarray(data["obs_map_bits"])
+        obs_map = np.unpackbits(
+            map_bits, axis=1, count=map_dim, bitorder="little"
+        ).astype(np.float32, copy=False)
+        obs_aux = np.asarray(data["obs_aux"], dtype=np.float32)
+        return np.concatenate([obs_map, obs_aux], axis=1)
+
+    if "obs_map" in data.files and "obs_aux" in data.files:
+        obs_map = np.asarray(data["obs_map"], dtype=np.float32)
+        obs_aux = np.asarray(data["obs_aux"], dtype=np.float32)
+        return np.concatenate([obs_map, obs_aux], axis=1)
+
+    raise KeyError("No supported observation keys found (obs/obs_map_bits/obs_map).")
 
 
 def apply_hidden_skip_schedule(
@@ -308,7 +332,7 @@ class OfflineDatasetLLMAugmented:
         for f in files:
             try:
                 with np.load(f, mmap_mode="r") as d:
-                    obs_shape = d["obs"].shape
+                    obs_shape = decode_obs_array(d).shape
                     Config.OBS_DIM = np.prod(obs_shape[1:])
                     first_readable_file = f
                     print(
@@ -446,9 +470,7 @@ class OfflineDatasetLLMAugmented:
         fpath, _expected_n = args
         try:
             with np.load(fpath) as data:
-                raw_obs = data["obs"]
-                if len(raw_obs.shape) > 2:
-                    raw_obs = raw_obs.reshape(raw_obs.shape[0], -1)
+                raw_obs = decode_obs_array(data)
 
                 pooled_hidden = None
                 if self.need_hidden:

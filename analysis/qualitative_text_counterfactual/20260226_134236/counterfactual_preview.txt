@@ -1,0 +1,476 @@
+=== step_0006 | step0006_dark_with_mobs ===
+reasoning: this is just a random starting point we can perturb (less health, less food, less water, less energy, darker, add mobs)
+description: Make the scene darker and add nearby hostile mobs.
+--- modified_text ---
+Map (interesting tiles only): 2, -4:tree, -3, -3:tree, -5, -2:tree, -4, -2:tree, -3, -1:tree, -2, -1:tree, 2, -1:tree, 3, -1:tree, 3, 1:tree, -4, 3:tree, 1, 0:Zombie on path, 0, 1:Skeleton on path
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.05
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_0006 | step0006_low_drink ===
+reasoning: this is just a random starting point we can perturb (less health, less food, less water, less energy, darker, add mobs)
+description: Lower drink sharply.
+--- modified_text ---
+Map (interesting tiles only): 2, -4:tree, -3, -3:tree, -5, -2:tree, -4, -2:tree, -3, -1:tree, -2, -1:tree, 2, -1:tree, 3, -1:tree, 3, 1:tree, -4, 3:tree
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 1
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.8384429216384888
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_0006 | step0006_low_energy ===
+reasoning: this is just a random starting point we can perturb (less health, less food, less water, less energy, darker, add mobs)
+description: Lower energy sharply.
+--- modified_text ---
+Map (interesting tiles only): 2, -4:tree, -3, -3:tree, -5, -2:tree, -4, -2:tree, -3, -1:tree, -2, -1:tree, 2, -1:tree, 3, -1:tree, 3, 1:tree, -4, 3:tree
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 1
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.8384429216384888
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_0006 | step0006_low_food ===
+reasoning: this is just a random starting point we can perturb (less health, less food, less water, less energy, darker, add mobs)
+description: Lower food sharply.
+--- modified_text ---
+Map (interesting tiles only): 2, -4:tree, -3, -3:tree, -5, -2:tree, -4, -2:tree, -3, -1:tree, -2, -1:tree, 2, -1:tree, 3, -1:tree, 3, 1:tree, -4, 3:tree
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 1
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.8384429216384888
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_0006 | step0006_low_health ===
+reasoning: this is just a random starting point we can perturb (less health, less food, less water, less energy, darker, add mobs)
+description: Lower health sharply.
+--- modified_text ---
+Map (interesting tiles only): 2, -4:tree, -3, -3:tree, -5, -2:tree, -4, -2:tree, -3, -1:tree, -2, -1:tree, 2, -1:tree, 3, -1:tree, 3, 1:tree, -4, 3:tree
+Inventory:
+Wood: 0
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 2.0
+Food: 9
+Drink: 9
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.8384429216384888
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_0240 | step0240_add_zombie_right ===
+reasoning: modify by adding a zombie one tile to my right
+description: Add a zombie one tile to the right.
+--- modified_text ---
+Map (interesting tiles only): 0, -4:stone, 1, -4:stone, 3, -4:lava, 4, -4:lava, 5, -4:lava, -5, -3:tree, -1, -3:tree, 0, -3:stone, 1, -3:stone, 3, -3:lava, 4, -3:lava, 5, -3:lava, -2, -2:tree, 0, -2:stone, 1, -2:stone, 4, -2:lava, 5, -2:lava, -5, -1:tree, -2, -1:tree, 0, -1:stone, 1, -1:stone, 4, -1:lava, 5, -1:stone, -5, 0:tree, -1, 0:stone, 2, 0:stone, 3, 0:lava, 4, 0:lava, 0, 1:stone, 1, 1:stone, 3, 1:lava, 4, 1:lava, 1, 2:stone, 2, 2:Cow on path, 4, 2:lava, 5, 2:lava, -2, 3:tree, 4, 3:lava, 5, 3:lava, -3, 4:tree, 1, 4:stone, 5, 4:lava, 1, 0:Zombie on path
+Inventory:
+Wood: 8
+Stone: 17
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Wood Pickaxe
+Wood Sword with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 6
+Drink: 7
+Energy: 9
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.13109314441680908
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_0619 | step0619_shift_arrow_skeleton_left ===
+reasoning: change so arrow and skeleton are moved one tile to the left (so skeleton is at 3,0 and arrow at 2,1)
+description: Move arrow and skeleton left to requested target coordinates.
+--- modified_text ---
+Map (interesting tiles only): -5, -3:tree, -5, -2:tree, -1, 1:coal, -4, 2:stone, -3, 2:stone, -2, 2:stone, -1, 2:stone, -5, 3:stone, -4, 3:stone, -3, 3:stone, -2, 3:stone, -1, 3:stone, 2, 3:stone, 4, 3:stone, -5, 4:stone, -4, 4:stone, -2, 4:Cow on path, 2, 4:stone, 2, 1:Arrow on path, 3, 0:Skeleton on path
+Inventory:
+Wood: 13
+Stone: 51
+Coal: 4
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Stone Pickaxe
+Stone Sword with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 6
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: up
+Light: 0.9228112697601318
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False
+
+=== step_1065 | step1065_no_sword_more_witches ===
+reasoning: change sword from iron to no sword,  add another few witches at (0, -2), (0, 3), (-1, -1)
+description: Remove iron sword from inventory and add witches at specified coordinates.
+--- modified_text ---
+Map (interesting tiles only): 5, -4:wall_moss, -4, -2:wall_moss, 1, -1:Fireball on path, 0, 2:Orc Mage on path, 2, 2:fountain, 0, -2:Witch on path, 0, 3:Witch on path, -1, -1:Witch on path
+Inventory:
+Wood: 22
+Stone: 67
+Coal: 5
+Iron: 1
+Diamond: 0
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 7
+Arrow: 4
+Book: 0
+Stone Pickaxe
+Bow with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 2
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 6
+Drink: 5
+Energy: 6
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: down
+Light: 0.3040139675140381
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: False
+Is Boss Vulnerable: False
+
+=== step_1103 | step1103_remove_stone ===
+reasoning: remove stone at 0, -1
+description: Remove the nearby stone block.
+--- modified_text ---
+Map (interesting tiles only): -3, -1:wall_moss, 1, -1:wall_moss, -4, 0:Orc Soldier on path, -2, 0:Orc Soldier on path, 1, 1:torch on path, 3, 3:Snail on path, 0, 4:wall_moss
+Inventory:
+Wood: 22
+Stone: 66
+Coal: 5
+Iron: 1
+Diamond: 0
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 7
+Arrow: 4
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 2
+Cyan potion: 0
+Yellow potion: 0
+Health: 2.0
+Food: 4
+Drink: 8
+Energy: 5
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.010484576225280762
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: False
+Is Boss Vulnerable: False
+
+=== step_1326 | step1326_torch_to_stone ===
+reasoning: replace the torch at 1, 0 with a stone block (so i have to get hit by fireball)
+description: Replace the torch with a stone block.
+--- modified_text ---
+Map (interesting tiles only): -1, -4:wall_moss, 0, -4:Arrow (Player) on path, 0, -1:Fireball on path, -3, 2:stone, 4, 2:Snail on path, -5, 3:wall_moss, 0, 1:stone
+Inventory:
+Wood: 22
+Stone: 64
+Coal: 5
+Iron: 1
+Diamond: 0
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 11
+Arrow: 3
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 2
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 9
+Drink: 6
+Energy: 6
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: down
+Light: 0.7507616281509399
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: False
+Is Boss Vulnerable: False
+
+=== step_1456 | step1456_remove_ladder_close ===
+reasoning: get rid of the ladder and set ladder opened to false
+description: Remove ladder tile and set ladder open to false.
+--- modified_text ---
+Map (interesting tiles only): -5, -1:wall_moss, 1, -1:fountain, 3, -1:wall_moss, -4, 0:Orc Mage on torch on path, 2, 0:torch on path, -4, 1:wall_moss, -3, 1:wall_moss
+Inventory:
+Wood: 22
+Stone: 64
+Coal: 5
+Iron: 1
+Diamond: 0
+Sapphire: 0
+Ruby: 1
+Sapling: 1
+Torch: 16
+Arrow: 2
+Book: 0
+Stone Pickaxe
+Iron Sword with No enchantment
+Bow with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 2
+Cyan potion: 0
+Yellow potion: 0
+Health: 5.0
+Food: 5
+Drink: 7
+Energy: 9
+Mana: 9
+XP: 1
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: left
+Light: 0.29263603687286377
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 1
+Ladder Open: False
+Is Boss Vulnerable: False

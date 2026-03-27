@@ -1,0 +1,17 @@
+[
+  {
+    "model": "/scratch/geney/latbench_6685099/qwen35_9b_compat",
+    "variant": "predict_state_only",
+    "calls": 1,
+    "ok_calls": 1,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 0.140778,
+    "avg_requests_per_second": 7.103382630808792,
+    "avg_end_to_end_latency_seconds": 0.141218,
+    "avg_end_to_end_responses_per_second": 7.081250265546885,
+    "avg_hidden_file_load_seconds": 0.00044,
+    "avg_completion_tokens": 1,
+    "avg_prompt_tokens": 1662,
+    "avg_total_tokens": 1663
+  }
+]

@@ -1,0 +1,28 @@
+[
+  {
+    "model": "configs/vllm_hidden_qwen4b",
+    "variant": "predict_history_k5",
+    "calls": 7,
+    "ok_calls": 7,
+    "error_calls": 0,
+    "request_mean_s": 4.891878714285714,
+    "request_p50_s": 5.203719,
+    "request_p90_s": 5.237885800000001,
+    "hidden_mean_s": 0.0005691428571428571,
+    "total_with_hidden_mean_s": 4.892447857142857,
+    "completion_tokens_mean": 256
+  },
+  {
+    "model": "configs/vllm_hidden_qwen4b",
+    "variant": "predict_state_only",
+    "calls": 7,
+    "ok_calls": 7,
+    "error_calls": 0,
+    "request_mean_s": 3.9154871428571427,
+    "request_p50_s": 4.098164,
+    "request_p90_s": 4.1048954,
+    "hidden_mean_s": 0.00037514285714285715,
+    "total_with_hidden_mean_s": 3.9158622857142857,
+    "completion_tokens_mean": 246.28571428571428
+  }
+]

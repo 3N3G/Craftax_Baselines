@@ -1,0 +1,39 @@
+Map (interesting tiles only): -4, -1:tree, -3, -1:tree, -5, 0:tree, -3, 0:tree, 4, 0:crafting_table, -4, 1:Skeleton on grass, -2, 1:Arrow on grass, -4, 2:tree, 0, 2:tree
+Inventory:
+Wood: 9
+Stone: 0
+Coal: 0
+Iron: 0
+Diamond: 0
+Sapphire: 0
+Ruby: 0
+Sapling: 0
+Torch: 0
+Arrow: 0
+Book: 0
+Wood Pickaxe
+Wood Sword with No enchantment
+Red potion: 0
+Green potion: 0
+Blue potion: 0
+Pink potion: 0
+Cyan potion: 0
+Yellow potion: 0
+Health: 9.0
+Food: 8
+Drink: 7
+Energy: 8
+Mana: 9
+XP: 0
+Dexterity: 1
+Strength: 1
+Intelligence: 1
+Direction: up
+Light: 0.9991665482521057
+Is Sleeping: False
+Is Resting: False
+Learned Fireball: False
+Learned Iceball: False
+Floor: 0
+Ladder Open: True
+Is Boss Vulnerable: False

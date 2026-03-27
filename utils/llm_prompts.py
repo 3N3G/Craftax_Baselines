@@ -10,6 +10,10 @@ This module provides consistent prompts for all LLM-based components:
 All LLM-related code should use these shared prompts for consistency.
 """
 
+import re
+import warnings
+from typing import Optional
+
 
 # Background tiles to filter out from observations
 BACKGROUND_TILES = {
@@ -75,8 +79,27 @@ Actions available:
 Note: Do NOT reference coordinates from the examples - those are just to show you how to strategically plan your moves. Only use the CURRENT GAME STATE.
 """
 
+FUTURE_FOCUS_APPENDIX = """
+### FUTURE AWARE REASONING
+In your <think> reasoning, explicitly model likely near-future outcomes:
+- Predict what could happen over the next few steps for multiple plausible action directions.
+- Consider likely enemy movement/attacks, intrinsic decay, and immediate resource consequences.
+- Highlight robust and risky futures
+"""
 
-FEW_SHOT_EXAMPLES = """
+FUTURE_OPT_SYSTEM_PROMPT = """You are analyzing Craftax future trajectories from one observation.
+
+Predict plausible near-future outcomes with emphasis on:
+- Immediate survival risk (damage/death risk, safe vs unsafe lines)
+- Intrinsic trends (health/food/drink/energy stability over next few steps)
+- Resource/progression implications (tempo gains/losses)
+
+You must not output any action id, action name, or explicit action recommendation.
+Use concise forecasting language only.
+"""
+
+
+FEW_SHOT_EXAMPLES_ACTION = """
 --- EXAMPLE 1 ---
 Game State:
 Map (interesting tiles only): 1, 0:crafting_table, 2, -3:tree, 4, 0:stone, 5, 0:stone
@@ -204,63 +227,443 @@ Action: DO (Attack).
 ==================================================
 """
 
+FEW_SHOT_EXAMPLES_FUTURE = """
+--- EXAMPLE 1 ---
+Game State:
+Map (interesting tiles only): 1, 0:crafting_table, 2, -3:tree, 4, 0:stone, 5, 0:stone
+Inventory:
+Wood: 3
+...
+Health: 9.0
+Food: 9
+Drink: 9
+Energy: 9
+Direction: right
+...
+<think>
+Possible near futures:
+1. If I path to the crafting table immediately, in a few steps I can convert wood into basic tools and speed up resource gain.
+2. If I detour to tree first, I gain extra wood but delay tool crafting and likely slower early progression.
+3. No immediate threat pressure (full intrinsics), so both are safe; the tool-first future is higher tempo.
+</think>
 
-def filter_text_obs(text_obs: str) -> str:
+--- EXAMPLE 2 ---
+Game State:
+Map (interesting tiles only): 0, -3:tree, 1, 3:stone
+Inventory:
+Wood: 0
+...
+Direction: right
+...
+<think>
+Possible near futures:
+1. Moving toward the tree likely produces wood in the next few turns, enabling crafting-table and starter tools soon after.
+2. Moving away from the tree delays wood economy and can stall early-game progression.
+3. There is low immediate danger, so the major future difference is speed of resource unlock.
+</think>
+
+--- EXAMPLE 3 ---
+Game State:
+Map (interesting tiles only): 0, -2:water, 3, -4:tree, -3, -3:tree, 4, -3:Skeleton on grass
+Inventory:
+...
+Health: 4.0
+Food: 5
+Drink: 4
+Direction: down
+...
+<think>
+Possible near futures:
+1. If I move toward water now, thirst recovery becomes likely soon, which improves health sustainability.
+2. If I spend turns gathering resources first, low health + thirst could compound into a fragile state.
+3. Skeleton is currently far enough that short-term hydration-first futures are likely safer.
+</think>
+
+--- EXAMPLE 4 ---
+Game State:
+Map (interesting tiles only): 0, 2:Arrow, 0, 3:Skeleton, 1, 1:Cow
+Inventory:
+Wood: 0
+...
+Health: 3.0
+Direction: right
+...
+<think>
+Possible near futures:
+1. Staying in row 0 risks immediate projectile damage from the incoming arrow.
+2. Exiting row 0 quickly likely avoids the arrow path and can transition into a healing path via nearby cow.
+3. Trying to force aggression while low health has high downside in the next few steps.
+</think>
+
+--- EXAMPLE 5 ---
+Game State:
+Map (interesting tiles only): 1, 0:Orc Soldier on torch on path, 4, 0:Snail on path
+Inventory:
+Wood: 17
+Iron: 4
+Stone: 61
+Iron Sword with No enchantment
+Iron Helmet with No enchantment
+...
+Health: 6.3
+Food: 3
+Direction: down
+...
+<think>
+Possible near futures:
+1. Immediate engagement with the nearby Orc could open space and advance ladder-unlock progress if the fight resolves cleanly.
+2. If hunger drops further during extended combat, survivability can degrade even with decent gear.
+3. A cautious future is to stabilize food before chaining multiple fights; an aggressive future is faster progress with more variance.
+</think>
+
+--- END OF EXAMPLES ---
+==================================================
+>>> LIVE ENVIRONMENT STREAM STARTS HERE <<<
+>>> IGNORE ALL COORDINATES FROM EXAMPLES ABOVE <<<
+==================================================
+"""
+
+FEW_SHOT_EXAMPLES_FUTURE_OPT = """
+--- EXAMPLE ---
+Game State:
+Map (interesting tiles only): 0, 2:Arrow, 0, 3:Skeleton, 1, 1:Cow
+Health: 3.0
+Food: 5
+Drink: 6
+Energy: 8
+Direction: right
+<think>
+Key points (<=64 tokens): low health; immediate projectile lane danger on row 0; nearby cow can stabilize.
+Future 1: If the trajectory stays in row 0, immediate damage is likely and death risk rises sharply.
+Future 2: If the trajectory exits row 0 quickly, near-term danger drops and stabilization becomes more likely.
+Future 3: If it forces aggression while fragile, variance increases with a high downside tail.
+</think>
+--- END EXAMPLE ---
+"""
+
+
+def get_system_prompt(prompt_variant: str = "default") -> str:
+    variant = (prompt_variant or "default").strip().lower()
+    if variant == "default":
+        return SYSTEM_PROMPT
+    if variant == "future_based":
+        return SYSTEM_PROMPT.rstrip() + "\n\n" + FUTURE_FOCUS_APPENDIX.strip() + "\n"
+    if variant == "future_based_opt":
+        return FUTURE_OPT_SYSTEM_PROMPT
+    raise ValueError(f"Unknown prompt_variant={prompt_variant!r}")
+
+
+def get_prompt_outline(prompt_variant: str = "default") -> str:
+    variant = (prompt_variant or "default").strip().lower()
+    if variant == "future_based":
+        return (
+            "Craftax base system prompt + future-aware appendix: forecast plausible near-future outcomes "
+            "(threats, intrinsic decay, resource consequences) without outputting an action."
+        )
+    if variant == "future_based_opt":
+        return (
+            "Compact future-forecast prompt: first summarize key state points (~64 tokens), then spend "
+            "remaining reasoning budget on three near-future rollout outcomes without action recommendation."
+        )
+    return (
+        "Craftax base system prompt: prioritize survival, resources/tools, and progression with "
+        "coordinate-aware tactical reasoning."
+    )
+
+
+def get_generation_prefix(prompt_variant: str = "default") -> str:
+    variant = (prompt_variant or "default").strip().lower()
+    if variant == "future_based_opt":
+        return "<think>\nKey points (<=64 tokens): "
+    return ""
+
+
+def get_generation_stop_sequences(prompt_variant: str = "default") -> list[str]:
+    variant = (prompt_variant or "default").strip().lower()
+    if variant == "future_based_opt":
+        return ["</think>"]
+    return []
+
+
+def get_prompt_sections(
+    prompt_variant: str = "default",
+    system_prompt: Optional[str] = None,
+) -> dict[str, object]:
+    """Return canonical prompt sections for a variant."""
+    variant = (prompt_variant or "default").strip().lower()
+    active_system_prompt = get_system_prompt(variant) if system_prompt is None else system_prompt
+
+    if variant == "future_based":
+        few_shot_examples = FEW_SHOT_EXAMPLES_FUTURE
+        task_instruction = (
+            "You are at (0,0). Output only a <think> block about plausible near-future outcomes. "
+            "Do not output an action id, action name, or action recommendation."
+        )
+    elif variant == "future_based_opt":
+        few_shot_examples = FEW_SHOT_EXAMPLES_FUTURE_OPT
+        task_instruction = (
+            "You are at (0,0). Output exactly:\n"
+            "<think>\n"
+            "Key points (<=64 tokens): ...\n"
+            "Future 1: ...\n"
+            "Future 2: ...\n"
+            "Future 3: ...\n"
+            "</think>\n"
+            "Rules: no setup/meta commentary; do not restate the full observation; no action recommendation."
+        )
+    elif variant == "default":
+        few_shot_examples = FEW_SHOT_EXAMPLES_ACTION
+        task_instruction = (
+            "You are at (0,0). Output your internal reasoning in a <think> block, "
+            "then end with: **Action:** <id> (<name>)."
+        )
+    else:
+        raise ValueError(f"Unknown prompt_variant={prompt_variant!r}")
+
+    return {
+        "prompt_variant": variant,
+        "system_prompt": active_system_prompt,
+        "few_shot_examples": few_shot_examples,
+        "task_instruction": task_instruction,
+        "generation_prefix": get_generation_prefix(variant),
+        "stop_sequences": get_generation_stop_sequences(variant),
+    }
+
+
+def build_user_prompt_content(
+    text_obs: str,
+    few_shot_examples: str,
+    task_instruction: str,
+) -> str:
+    """Build the canonical user message body used by training/eval pipelines."""
+    return (
+        "Below are examples of good gameplay reasoning. "
+        "These are EXAMPLES ONLY, not your actual game history:\n"
+        f"{few_shot_examples}\n"
+        "YOUR CURRENT GAME STATE (use ONLY this map for coordinates):\n"
+        f"{text_obs}\n\n"
+        f"{task_instruction}"
+    )
+
+
+MAP_INTERESTING_PREFIX = "Map (interesting tiles only): "
+MAP_EMPTY_INTERESTING = "Map: [No interesting tiles in view - all background]"
+_MAP_COORD_PREFIX_RE = re.compile(r"-?\d+\s*,\s*-?\d+\s*:")
+_MAP_ENTRY_RE = re.compile(r"^\s*(-?\d+)\s*,\s*(-?\d+)\s*:\s*(.+?)\s*$")
+
+
+def _split_compact_map_entries(payload: str) -> list[str]:
+    """Split compact map payload into per-tile entries without losing row/col commas."""
+    content = payload.strip()
+    if not content:
+        return []
+    starts = list(_MAP_COORD_PREFIX_RE.finditer(content))
+    if not starts:
+        return []
+    entries: list[str] = []
+    for i, match in enumerate(starts):
+        start = match.start()
+        end = starts[i + 1].start() if (i + 1) < len(starts) else len(content)
+        token = content[start:end].strip().rstrip(",").strip()
+        if token:
+            entries.append(token)
+    return entries
+
+
+def _parse_map_entry(entry: str) -> Optional[tuple[int, int, str]]:
+    """Parse one map token of shape 'row,col:tile'."""
+    m = _MAP_ENTRY_RE.fullmatch(entry.strip())
+    if m is None:
+        return None
+    row_s, col_s, tile = m.groups()
+    try:
+        row = int(row_s)
+        col = int(col_s)
+    except ValueError:
+        return None
+    tile_name = tile.strip()
+    if not tile_name:
+        return None
+    return row, col, tile_name
+
+
+def _collect_map_block(lines: list[str], start_idx: int) -> tuple[list[str], int]:
+    """
+    Return contiguous map block lines and the next unread index.
+
+    Supports both:
+    - compact single-line map: "Map: -4,-5:water, ..."
+    - multiline map:
+      "Map:"
+      "-4, -5: water"
+      ...
+    """
+    first_line = lines[start_idx]
+    stripped = first_line.strip()
+    block = [first_line]
+    next_idx = start_idx + 1
+
+    # Inline compact map payload -> single-line block
+    inline_payload = stripped[4:].strip() if stripped.startswith("Map:") else ""
+    if inline_payload:
+        return block, next_idx
+
+    # Multiline map payload -> consume contiguous map rows
+    while next_idx < len(lines):
+        candidate = lines[next_idx]
+        candidate_stripped = candidate.strip()
+        if not candidate_stripped:
+            break
+        if candidate_stripped.startswith("Inventory:"):
+            break
+        block.append(candidate)
+        next_idx += 1
+    return block, next_idx
+
+
+def _parse_map_block(block_lines: list[str]) -> tuple[bool, list[tuple[int, int, str]]]:
+    """Parse map block into (row, col, tile) tuples."""
+    if not block_lines:
+        return False, []
+    first = block_lines[0].strip()
+    if not first.startswith("Map:"):
+        return False, []
+
+    parsed: list[tuple[int, int, str]] = []
+
+    def _consume_payload(payload: str) -> bool:
+        tokens = _split_compact_map_entries(payload)
+        if not tokens:
+            token = payload.strip().rstrip(",").strip()
+            if not token:
+                return True
+            tokens = [token]
+        for token in tokens:
+            entry = _parse_map_entry(token)
+            if entry is None:
+                return False
+            parsed.append(entry)
+        return True
+
+    inline_payload = first[4:].strip()
+    if inline_payload:
+        return _consume_payload(inline_payload), parsed
+
+    for line in block_lines[1:]:
+        if not _consume_payload(line.strip()):
+            return False, []
+    return True, parsed
+
+
+def _format_map_entries(entries: list[tuple[int, int, str]]) -> str:
+    return ", ".join(f"{row}, {col}:{tile}" for row, col, tile in entries)
+
+
+def _validate_interesting_map_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped.startswith(MAP_INTERESTING_PREFIX):
+        return True
+    payload = stripped[len(MAP_INTERESTING_PREFIX):].strip()
+    if not payload:
+        return False
+    tokens = _split_compact_map_entries(payload)
+    if not tokens:
+        return False
+    return all(_parse_map_entry(token) is not None for token in tokens)
+
+
+def ensure_valid_interesting_map(text_obs: str) -> None:
+    """Raise if any emitted 'Map (interesting tiles only)' line has malformed coordinates."""
+    for line in text_obs.splitlines():
+        if line.strip().startswith(MAP_INTERESTING_PREFIX) and not _validate_interesting_map_line(line):
+            raise ValueError(
+                "Malformed 'Map (interesting tiles only)' line detected: "
+                f"{line!r}. Expected repeated 'row,col:tile' entries."
+            )
+
+
+def filter_text_obs(text_obs: str, strict_map_validation: bool = False) -> str:
     """
     Filter out background tiles from the text observation to reduce token count
     and help the model focus on interesting/interactive tiles.
     
-    Handles the compact Map: format from obs_to_text:
-    Map: -5,-4:grass, -4,-4:tree, ...
+    Handles both map formats:
+    - compact: "Map: -5,-4:grass, -4,-4:tree, ..."
+    - multiline:
+      "Map:"
+      "-5, -4: grass"
+      ...
     
     Args:
         text_obs: The full text observation from obs_to_text()
+        strict_map_validation: if True, raise if malformed interesting-map coordinates
     
     Returns:
         Filtered observation with only interesting tiles shown
     """
-    lines = text_obs.split('\n')
-    filtered_lines = []
-    
-    for line in lines:
+    lines = text_obs.split("\n")
+    filtered_lines: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
-        
-        # Detect Map line (compact format from obs_to_text)
-        if stripped.startswith('Map:'):
-            # Parse the compact map format
-            map_content = stripped[4:].strip()  # Remove "Map:" prefix
-            tiles = [t.strip() for t in map_content.split(',') if ':' in t]
-            
-            interesting_tiles = []
-            for tile in tiles:
-                # Handle compound tiles like "-5,-4:grass" 
-                # Find the last colon which separates coord from tile type
-                parts = tile.rsplit(':', 1)
-                if len(parts) == 2:
-                    coord = parts[0].strip()
-                    tile_type = parts[1].strip().lower()
-                    
-                    # Check if tile is interesting (not pure background)
+
+        if stripped.startswith("Map:"):
+            block_lines, next_idx = _collect_map_block(lines, i)
+            parsed_ok, parsed_entries = _parse_map_block(block_lines)
+            if parsed_ok:
+                interesting_entries: list[tuple[int, int, str]] = []
+                for row, col, tile in parsed_entries:
+                    tile_type = tile.strip().lower()
                     is_background = tile_type in BACKGROUND_TILES
-                    has_entity = ' on ' in tile_type  # e.g., "Cow on grass"
-                    
-                    if not is_background or has_entity:
-                        interesting_tiles.append(f"{coord}:{parts[1].strip()}")
-            
-            if interesting_tiles:
-                filtered_lines.append(f"Map (interesting tiles only): {', '.join(interesting_tiles)}")
+                    has_entity = " on " in tile_type
+                    if (not is_background) or has_entity:
+                        interesting_entries.append((row, col, tile.strip()))
+
+                if interesting_entries:
+                    formatted = _format_map_entries(interesting_entries)
+                    map_line = f"{MAP_INTERESTING_PREFIX}{formatted}"
+                    if not _validate_interesting_map_line(map_line):
+                        warnings.warn(
+                            "Map validation failed after filtering; falling back to original map block.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        for original in block_lines:
+                            if original.strip():
+                                filtered_lines.append(original)
+                    else:
+                        filtered_lines.append(map_line)
+                else:
+                    filtered_lines.append(MAP_EMPTY_INTERESTING)
             else:
-                filtered_lines.append("Map: [No interesting tiles in view - all background]")
+                warnings.warn(
+                    "Failed to parse map block; keeping original unfiltered map segment.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                for original in block_lines:
+                    if original.strip():
+                        filtered_lines.append(original)
+
+            i = next_idx
             continue
-        
-        # Keep all non-map lines
+
         if stripped:
             filtered_lines.append(line)
-    
-    return '\n'.join(filtered_lines)
+        i += 1
+
+    filtered = "\n".join(filtered_lines)
+    if strict_map_validation:
+        ensure_valid_interesting_map(filtered)
+    return filtered
 
 
-def create_chat_messages(text_obs: str) -> list[dict]:
+def create_chat_messages(
+    text_obs: str,
+    system_prompt: Optional[str] = None,
+    prompt_variant: str = "default",
+) -> list[dict]:
     """
     Create chat messages for LLM from a text observation.
     
@@ -270,25 +673,30 @@ def create_chat_messages(text_obs: str) -> list[dict]:
     Returns:
         List of chat message dictionaries with 'role' and 'content'
     """
+    sections = get_prompt_sections(
+        prompt_variant=prompt_variant,
+        system_prompt=system_prompt,
+    )
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": str(sections["system_prompt"])},
         {
-            "role": "user", 
-            "content": (
-                f"Below are examples of good gameplay decisions. "
-                f"These are EXAMPLES ONLY, not your actual game history:\n"
-                f"{FEW_SHOT_EXAMPLES}\n"
-                f"YOUR CURRENT GAME STATE (use ONLY this map for coordinates):\n"
-                f"{text_obs}\n\n"
-                f"You are at (0,0). Output your internal reasoning in a <think> block, "
-                f"then end with: **Action:** <id> (<name>)."
-            )
+            "role": "user",
+            "content": build_user_prompt_content(
+                text_obs=text_obs,
+                few_shot_examples=str(sections["few_shot_examples"]),
+                task_instruction=str(sections["task_instruction"]),
+            ),
         },
     ]
     return messages
 
 
-def create_prompt(text_obs: str, tokenizer) -> str:
+def create_prompt(
+    text_obs: str,
+    tokenizer,
+    system_prompt: Optional[str] = None,
+    prompt_variant: str = "default",
+) -> str:
     """
     Create a formatted prompt string for LLM from a text observation.
     
@@ -299,5 +707,9 @@ def create_prompt(text_obs: str, tokenizer) -> str:
     Returns:
         Formatted prompt string ready for tokenization
     """
-    messages = create_chat_messages(text_obs)
+    messages = create_chat_messages(
+        text_obs,
+        system_prompt=system_prompt,
+        prompt_variant=prompt_variant,
+    )
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)

@@ -168,6 +168,15 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros((1, *env.observation_space(env_params).shape))
         network_params = network.init(_rng, init_x)
+        init_policy_path = str(config.get("INIT_POLICY_PATH", "")).strip()
+        if init_policy_path:
+            init_path = Path(init_policy_path).expanduser()
+            if not init_path.exists():
+                raise FileNotFoundError(f"init policy checkpoint not found: {init_path}")
+            with init_path.open("rb") as f:
+                init_blob = f.read()
+            network_params = serialization.from_bytes(network_params, init_blob)
+            print(f"Loaded initial policy params from {init_path}")
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -547,7 +556,10 @@ def make_train(config):
 
             # Add timestep tracking to match online_rl_hidden.py
             # Each update processes NUM_STEPS * NUM_ENVS environment steps
-            metric["timestep"] = (update_step + 1) * config["NUM_STEPS"] * config["NUM_ENVS"]
+            metric["timestep"] = (
+                int(config.get("TIMESTEP_OFFSET", 0))
+                + (update_step + 1) * config["NUM_STEPS"] * config["NUM_ENVS"]
+            )
 
             rng = update_state[-1]
 
@@ -692,23 +704,20 @@ def make_train(config):
             if config["SAVE_TRAJ"]:
 
                 def save_callback(traj_batch, update_step):
+                    if update_step < config.get("SAVE_TRAJ_AFTER_UPDATE", 0):
+                        return
                     if update_step % config["SAVE_TRAJ_EVERY"] == 0:
-                        # Convert to numpy and reshape
-                        # traj_batch shape is (NUM_STEPS, NUM_ENVS, ...)
-                        # Reshape to (NUM_STEPS * NUM_ENVS, ...)
+                        # Keep (NUM_STEPS, NUM_ENVS, ...) shape for per-env
+                        # episode reconstruction in post-processing.
+                        # Save obs as float16 (99.6% binary → lossless;
+                        # 35 continuous dims low-precision → lossless in practice).
+                        # Drop next_obs (not used by downstream AWR).
                         batch_data = {
-                            "obs": np.array(traj_batch.obs).reshape(
-                                -1, *traj_batch.obs.shape[2:]
-                            ),
-                            "next_obs": np.array(traj_batch.next_obs).reshape(
-                                -1, *traj_batch.next_obs.shape[2:]
-                            ),
-                            "action": np.array(traj_batch.action).reshape(-1),
-                            "reward": np.array(traj_batch.reward).reshape(
-                                -1
-                            ),  # I'm assuming no intrisic reward, so reward_e = reward
-                            "done": np.array(traj_batch.done).reshape(-1),
-                            "log_prob": np.array(traj_batch.log_prob).reshape(-1),
+                            "obs": np.array(traj_batch.obs, dtype=np.float16),
+                            "action": np.array(traj_batch.action),
+                            "reward": np.array(traj_batch.reward),
+                            "done": np.array(traj_batch.done),
+                            "log_prob": np.array(traj_batch.log_prob),
                         }
 
                         save_trajectory_batch(
@@ -791,19 +800,33 @@ def make_train(config):
                 jax.experimental.io_callback(video_callback, None, train_state.params, update_step, rng)
 
             if config.get("SAVE_POLICY_EVERY_STEPS", 0) > 0 and config.get("POLICY_SAVE_DIR"):
-                def policy_callback(params, update_step):
-                    timestep = int((int(update_step) + 1) * config["NUM_STEPS"] * config["NUM_ENVS"])
-                    save_every = int(config["SAVE_POLICY_EVERY_STEPS"])
-                    if save_every <= 0 or (timestep % save_every != 0):
-                        return
+                save_every = int(config["SAVE_POLICY_EVERY_STEPS"])
+                step_stride = int(config["NUM_STEPS"] * config["NUM_ENVS"])
+                timestep_offset = int(config.get("TIMESTEP_OFFSET", 0))
+
+                prev_timestep = timestep_offset + update_step * step_stride
+                curr_timestep = prev_timestep + step_stride
+                crossed_save_boundary = (curr_timestep // save_every) > (prev_timestep // save_every)
+
+                def policy_callback(params, timestep):
                     save_policy_checkpoint_msgpack(
                         params=params,
-                        timestep=timestep,
+                        timestep=int(timestep),
                         save_dir=config["POLICY_SAVE_DIR"],
                         metadata=config.get("POLICY_METADATA", {}),
                     )
 
-                jax.experimental.io_callback(policy_callback, None, train_state.params, update_step)
+                def _save_policy(payload):
+                    params, timestep = payload
+                    jax.experimental.io_callback(policy_callback, None, params, timestep)
+                    return None
+
+                jax.lax.cond(
+                    crossed_save_boundary,
+                    _save_policy,
+                    lambda _: None,
+                    (train_state.params, curr_timestep),
+                )
 
             runner_state = (
                 train_state,
@@ -824,7 +847,7 @@ def make_train(config):
             _rng,
             0,
         )
-        runner_state, metric = jax.lax.scan(
+        runner_state, _ = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
         return {"runner_state": runner_state}  # , "info": metric}
@@ -842,6 +865,11 @@ def run_ppo(config):
         "total_timesteps": int(config["TOTAL_TIMESTEPS"]),
         "seed": int(config["SEED"]),
     }
+    if config.get("INIT_POLICY_PATH"):
+        config["POLICY_METADATA"]["init_policy_path"] = str(config["INIT_POLICY_PATH"])
+    config["POLICY_METADATA"]["timestep_offset"] = int(config.get("TIMESTEP_OFFSET", 0))
+
+    final_timestep = int(config.get("TIMESTEP_OFFSET", 0)) + int(config["TOTAL_TIMESTEPS"])
 
     if config.get("SAVE_POLICY_EVERY_STEPS", 0) < 0:
         raise ValueError("--save_policy_every_steps must be >= 0")
@@ -902,7 +930,7 @@ def run_ppo(config):
             print(f"saved runner state to {path}")
             save_args = orbax_utils.save_args_from_target(train_state)
             checkpoint_manager.save(
-                config["TOTAL_TIMESTEPS"],
+                final_timestep,
                 train_state,
                 save_kwargs={"save_args": save_args},
             )
@@ -915,7 +943,7 @@ def run_ppo(config):
         train_state = jax.tree.map(lambda x: x[0], train_states)
         save_policy_checkpoint_msgpack(
             params=train_state.params,
-            timestep=int(config["TOTAL_TIMESTEPS"]),
+            timestep=final_timestep,
             save_dir=config["POLICY_SAVE_DIR"],
             metadata={
                 **config.get("POLICY_METADATA", {}),
@@ -974,6 +1002,18 @@ if __name__ == "__main__":
         default=True,
         help="Save final msgpack policy checkpoint at total_timesteps.",
     )
+    parser.add_argument(
+        "--init_policy_path",
+        type=str,
+        default="",
+        help="Optional msgpack policy checkpoint path to initialize training from.",
+    )
+    parser.add_argument(
+        "--timestep_offset",
+        type=int,
+        default=0,
+        help="Absolute timestep offset used for logging/checkpoint naming when continuing runs.",
+    )
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--layer_size", type=int, default=512)
     parser.add_argument("--wandb_project", type=str)
@@ -989,6 +1029,12 @@ if __name__ == "__main__":
         default="/data/group_data/rl/geney/craftax_unlabelled_symbolic_with_text/",
     )
     parser.add_argument("--save_traj_every", type=int, default=1)
+    parser.add_argument(
+        "--save_traj_after_update",
+        type=int,
+        default=0,
+        help="Only start saving trajectories after this update number.",
+    )
     parser.add_argument("--save_video", action="store_true")
     parser.add_argument("--save_video_every", type=int, default=100)
     parser.add_argument("--max_video_steps", type=int, default=1000)

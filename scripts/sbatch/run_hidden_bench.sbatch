@@ -14,7 +14,8 @@
 set -e
 
 source ~/.bashrc
-conda activate craftax_fast_llm
+HIDDEN_BENCH_ENV_PATH="${HIDDEN_BENCH_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
+conda activate "${HIDDEN_BENCH_ENV_PATH}"
 
 mkdir -p logs
 cd ~/Craftax_Baselines

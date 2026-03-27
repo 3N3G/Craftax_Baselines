@@ -1,0 +1,115 @@
+{
+  "generated_at": "2026-03-12T16:01:47.674996",
+  "args": {
+    "trajectory_dir": "play_data/trajectory_records/traj_20260311_100410",
+    "config": "configs/future_imagination/run_config_oracle_keytimesteps_traj_20260311_100410_stride2.json",
+    "output_root": "/home/geney/Craftax_Baselines/analysis/future_imagination",
+    "output_dir": "analysis/future_imagination/20260312_125846_traj_20260311_100410_oracle_key5_stride2_cap1110_tb0_gemini3flashpreview",
+    "run_name": "",
+    "provider": "gemini",
+    "model": "gemini-3-flash-preview",
+    "base_url": "",
+    "api_key": "",
+    "api_key_env": "GEMINI_API_KEY",
+    "dry_run": false,
+    "estimate_only": false,
+    "resume": true,
+    "retry_errors": false,
+    "max_calls": 0,
+    "request_timeout_s": 120.0,
+    "max_retries": 4,
+    "min_request_interval_s": 0.0,
+    "allow_placeholder_templates": false,
+    "store_full_prompts": true,
+    "prompt_preview_chars": 1600,
+    "strict_map_validation": true,
+    "selection_start": null,
+    "selection_end": null,
+    "selection_stride": null,
+    "selection_max_states": null,
+    "max_markdown_timesteps": 120
+  },
+  "trajectory_dir": "/home/geney/Craftax_Baselines/play_data/trajectory_records/traj_20260311_100410",
+  "trajectory_id": "traj_20260311_100410",
+  "num_total_steps": 2334,
+  "selection": {
+    "mode": "explicit_only",
+    "start_t": 0,
+    "end_t": 0,
+    "stride": 1,
+    "max_states": null,
+    "include_terminal_t": false,
+    "explicit_timesteps": [
+      0,
+      283,
+      298,
+      2180,
+      2195
+    ]
+  },
+  "selected_timesteps": [
+    0,
+    283,
+    298,
+    2180,
+    2195
+  ],
+  "run_specs": [
+    {
+      "id": "oracle_privileged",
+      "role": "oracle",
+      "description": "Narrative oracle summary from current state through privileged future trajectory (stride=2 snapshots, capped for <1M tokens)",
+      "template_path": "/home/geney/Craftax_Baselines/configs/future_imagination/templates/oracle_privileged_prompt.txt",
+      "history_k": 1,
+      "history_format": "compact",
+      "future_stride": 2,
+      "future_max_states": 1110,
+      "future_format": "compact",
+      "future_event_max": 0,
+      "future_include_terminal": true,
+      "generation": {
+        "temperature": 0.3,
+        "max_output_tokens": 700,
+        "thinking_budget": 0,
+        "top_p": 0.95
+      },
+      "stop_sequences": []
+    }
+  ],
+  "estimate": {
+    "selected_timesteps": 5,
+    "run_specs": 1,
+    "total_calls": 5,
+    "prompt_chars_total": 5532846,
+    "prompt_tokens_rough_total": 1383212,
+    "per_run": {
+      "oracle_privileged": {
+        "num_calls": 5,
+        "prompt_chars_total": 5532846,
+        "prompt_chars_mean": 1106569.2,
+        "prompt_tokens_rough_total": 1383212,
+        "prompt_tokens_rough_mean": 276642.3
+      }
+    },
+    "trajectory_dir": "/home/geney/Craftax_Baselines/play_data/trajectory_records/traj_20260311_100410",
+    "trajectory_id": "traj_20260311_100410",
+    "selection": {
+      "mode": "explicit_only",
+      "start_t": 0,
+      "end_t": 0,
+      "stride": 1,
+      "max_states": null,
+      "include_terminal_t": false,
+      "explicit_timesteps": [
+        0,
+        283,
+        298,
+        2180,
+        2195
+      ]
+    },
+    "provider": "gemini",
+    "model": "gemini-3-flash-preview",
+    "dry_run": false
+  }
+}
