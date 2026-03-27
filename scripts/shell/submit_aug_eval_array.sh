@@ -4,7 +4,6 @@
 #SBATCH --error=logs/eval_array_%A_%a.err
 #SBATCH --time=48:00:00
 #SBATCH --partition=rl
-#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1        # Request 1 GPU per Server/Client pair
 #SBATCH --cpus-per-task=8   # Ensure enough CPU cores for JAX/Data loading
 #SBATCH --mem=64G

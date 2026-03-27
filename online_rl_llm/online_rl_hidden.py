@@ -324,9 +324,7 @@ class LLMHiddenStateManager:
         text_observations = []
         for i in range(num_envs):
             raw_text = render_craftax_text_swapped(states[i])
-            # Hard fail on malformed interesting-map coordinates so training does
-            # not silently continue with corrupted prompt geometry.
-            filtered_text = filter_text_obs(raw_text, strict_map_validation=True)
+            filtered_text = filter_text_obs(raw_text)
             text_observations.append(filtered_text)
 
         t_text = time.perf_counter() - t_start

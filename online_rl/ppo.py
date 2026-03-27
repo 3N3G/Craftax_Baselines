@@ -1,9 +1,7 @@
 import argparse
-import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +18,6 @@ from typing import NamedTuple
 
 from flax.training import orbax_utils
 from flax.training.train_state import TrainState
-from flax import serialization
 from orbax.checkpoint import (
     PyTreeCheckpointer,
     CheckpointManagerOptions,
@@ -71,40 +68,6 @@ def save_trajectory_batch(batch_data, batch_idx, save_path, env_states=None, env
         f"Saved batch {batch_idx} ({len(batch_data['obs'])} transitions) to {filepath}"
     )
     print(f"  Keys: {keys_saved}")
-
-
-def save_policy_checkpoint_msgpack(
-    params,
-    timestep: int,
-    save_dir: str,
-    metadata: dict | None = None,
-) -> tuple[str, str]:
-    save_path = Path(save_dir).expanduser().resolve()
-    save_path.mkdir(parents=True, exist_ok=True)
-
-    params_host = jax.device_get(params)
-    ckpt_path = save_path / f"ppo_symbolic_step_{int(timestep):012d}.msgpack"
-    with ckpt_path.open("wb") as f:
-        f.write(serialization.to_bytes(params_host))
-
-    meta_payload = {
-        "timestep": int(timestep),
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "checkpoint_path": str(ckpt_path),
-    }
-    if metadata:
-        meta_payload.update(metadata)
-
-    meta_path = ckpt_path.with_suffix(".json")
-    with meta_path.open("w", encoding="utf-8") as f:
-        json.dump(meta_payload, f, indent=2, sort_keys=True)
-
-    latest_path = save_path / "latest_policy.json"
-    with latest_path.open("w", encoding="utf-8") as f:
-        json.dump(meta_payload, f, indent=2, sort_keys=True)
-
-    print(f"Saved policy checkpoint: {ckpt_path}")
-    return str(ckpt_path), str(meta_path)
 
 
 # Code adapted from the original implementation made by Chris Lu
@@ -168,15 +131,6 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros((1, *env.observation_space(env_params).shape))
         network_params = network.init(_rng, init_x)
-        init_policy_path = str(config.get("INIT_POLICY_PATH", "")).strip()
-        if init_policy_path:
-            init_path = Path(init_policy_path).expanduser()
-            if not init_path.exists():
-                raise FileNotFoundError(f"init policy checkpoint not found: {init_path}")
-            with init_path.open("rb") as f:
-                init_blob = f.read()
-            network_params = serialization.from_bytes(network_params, init_blob)
-            print(f"Loaded initial policy params from {init_path}")
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -556,10 +510,7 @@ def make_train(config):
 
             # Add timestep tracking to match online_rl_hidden.py
             # Each update processes NUM_STEPS * NUM_ENVS environment steps
-            metric["timestep"] = (
-                int(config.get("TIMESTEP_OFFSET", 0))
-                + (update_step + 1) * config["NUM_STEPS"] * config["NUM_ENVS"]
-            )
+            metric["timestep"] = (update_step + 1) * config["NUM_STEPS"] * config["NUM_ENVS"]
 
             rng = update_state[-1]
 
@@ -704,20 +655,23 @@ def make_train(config):
             if config["SAVE_TRAJ"]:
 
                 def save_callback(traj_batch, update_step):
-                    if update_step < config.get("SAVE_TRAJ_AFTER_UPDATE", 0):
-                        return
                     if update_step % config["SAVE_TRAJ_EVERY"] == 0:
-                        # Keep (NUM_STEPS, NUM_ENVS, ...) shape for per-env
-                        # episode reconstruction in post-processing.
-                        # Save obs as float16 (99.6% binary → lossless;
-                        # 35 continuous dims low-precision → lossless in practice).
-                        # Drop next_obs (not used by downstream AWR).
+                        # Convert to numpy and reshape
+                        # traj_batch shape is (NUM_STEPS, NUM_ENVS, ...)
+                        # Reshape to (NUM_STEPS * NUM_ENVS, ...)
                         batch_data = {
-                            "obs": np.array(traj_batch.obs, dtype=np.float16),
-                            "action": np.array(traj_batch.action),
-                            "reward": np.array(traj_batch.reward),
-                            "done": np.array(traj_batch.done),
-                            "log_prob": np.array(traj_batch.log_prob),
+                            "obs": np.array(traj_batch.obs).reshape(
+                                -1, *traj_batch.obs.shape[2:]
+                            ),
+                            "next_obs": np.array(traj_batch.next_obs).reshape(
+                                -1, *traj_batch.next_obs.shape[2:]
+                            ),
+                            "action": np.array(traj_batch.action).reshape(-1),
+                            "reward": np.array(traj_batch.reward).reshape(
+                                -1
+                            ),  # I'm assuming no intrisic reward, so reward_e = reward
+                            "done": np.array(traj_batch.done).reshape(-1),
+                            "log_prob": np.array(traj_batch.log_prob).reshape(-1),
                         }
 
                         save_trajectory_batch(
@@ -799,35 +753,6 @@ def make_train(config):
 
                 jax.experimental.io_callback(video_callback, None, train_state.params, update_step, rng)
 
-            if config.get("SAVE_POLICY_EVERY_STEPS", 0) > 0 and config.get("POLICY_SAVE_DIR"):
-                save_every = int(config["SAVE_POLICY_EVERY_STEPS"])
-                step_stride = int(config["NUM_STEPS"] * config["NUM_ENVS"])
-                timestep_offset = int(config.get("TIMESTEP_OFFSET", 0))
-
-                prev_timestep = timestep_offset + update_step * step_stride
-                curr_timestep = prev_timestep + step_stride
-                crossed_save_boundary = (curr_timestep // save_every) > (prev_timestep // save_every)
-
-                def policy_callback(params, timestep):
-                    save_policy_checkpoint_msgpack(
-                        params=params,
-                        timestep=int(timestep),
-                        save_dir=config["POLICY_SAVE_DIR"],
-                        metadata=config.get("POLICY_METADATA", {}),
-                    )
-
-                def _save_policy(payload):
-                    params, timestep = payload
-                    jax.experimental.io_callback(policy_callback, None, params, timestep)
-                    return None
-
-                jax.lax.cond(
-                    crossed_save_boundary,
-                    _save_policy,
-                    lambda _: None,
-                    (train_state.params, curr_timestep),
-                )
-
             runner_state = (
                 train_state,
                 env_state,
@@ -847,7 +772,7 @@ def make_train(config):
             _rng,
             0,
         )
-        runner_state, _ = jax.lax.scan(
+        runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
         return {"runner_state": runner_state}  # , "info": metric}
@@ -857,22 +782,6 @@ def make_train(config):
 
 def run_ppo(config):
     config = {k.upper(): v for k, v in config.__dict__.items()}
-    config["RUN_START_UTC"] = datetime.now(timezone.utc).isoformat()
-    config["POLICY_METADATA"] = {
-        "env_name": config["ENV_NAME"],
-        "num_envs": int(config["NUM_ENVS"]),
-        "num_steps": int(config["NUM_STEPS"]),
-        "total_timesteps": int(config["TOTAL_TIMESTEPS"]),
-        "seed": int(config["SEED"]),
-    }
-    if config.get("INIT_POLICY_PATH"):
-        config["POLICY_METADATA"]["init_policy_path"] = str(config["INIT_POLICY_PATH"])
-    config["POLICY_METADATA"]["timestep_offset"] = int(config.get("TIMESTEP_OFFSET", 0))
-
-    final_timestep = int(config.get("TIMESTEP_OFFSET", 0)) + int(config["TOTAL_TIMESTEPS"])
-
-    if config.get("SAVE_POLICY_EVERY_STEPS", 0) < 0:
-        raise ValueError("--save_policy_every_steps must be >= 0")
 
     if config["USE_WANDB"]:
         wandb.init(
@@ -930,26 +839,13 @@ def run_ppo(config):
             print(f"saved runner state to {path}")
             save_args = orbax_utils.save_args_from_target(train_state)
             checkpoint_manager.save(
-                final_timestep,
+                config["TOTAL_TIMESTEPS"],
                 train_state,
                 save_kwargs={"save_args": save_args},
             )
 
         if config["SAVE_POLICY"]:
             _save_network(0, "policies")
-
-    if config.get("SAVE_POLICY_FINAL", True) and config.get("POLICY_SAVE_DIR"):
-        train_states = out["runner_state"][0]
-        train_state = jax.tree.map(lambda x: x[0], train_states)
-        save_policy_checkpoint_msgpack(
-            params=train_state.params,
-            timestep=final_timestep,
-            save_dir=config["POLICY_SAVE_DIR"],
-            metadata={
-                **config.get("POLICY_METADATA", {}),
-                "final_checkpoint": True,
-            },
-        )
 
 
 if __name__ == "__main__":
@@ -984,36 +880,6 @@ if __name__ == "__main__":
         "--use_wandb", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument("--save_policy", action="store_true")
-    parser.add_argument(
-        "--policy_save_dir",
-        type=str,
-        default="",
-        help="Directory for msgpack policy checkpoints (periodic + final).",
-    )
-    parser.add_argument(
-        "--save_policy_every_steps",
-        type=int,
-        default=0,
-        help="Save msgpack policy checkpoint every N env steps (0 disables periodic saves).",
-    )
-    parser.add_argument(
-        "--save_policy_final",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Save final msgpack policy checkpoint at total_timesteps.",
-    )
-    parser.add_argument(
-        "--init_policy_path",
-        type=str,
-        default="",
-        help="Optional msgpack policy checkpoint path to initialize training from.",
-    )
-    parser.add_argument(
-        "--timestep_offset",
-        type=int,
-        default=0,
-        help="Absolute timestep offset used for logging/checkpoint naming when continuing runs.",
-    )
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--layer_size", type=int, default=512)
     parser.add_argument("--wandb_project", type=str)
@@ -1029,12 +895,6 @@ if __name__ == "__main__":
         default="/data/group_data/rl/geney/craftax_unlabelled_symbolic_with_text/",
     )
     parser.add_argument("--save_traj_every", type=int, default=1)
-    parser.add_argument(
-        "--save_traj_after_update",
-        type=int,
-        default=0,
-        help="Only start saving trajectories after this update number.",
-    )
     parser.add_argument("--save_video", action="store_true")
     parser.add_argument("--save_video_every", type=int, default=100)
     parser.add_argument("--max_video_steps", type=int, default=1000)

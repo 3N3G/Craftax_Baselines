@@ -1,3 +1,0 @@
-t,run_id,role,status,latency_s,prompt_chars,response_chars,prompt_tokens,completion_tokens,total_tokens,error,response_preview
-1310,oracle_privileged,oracle,ok,14.144249,1795672,2279,1006069,548,1006617,,"Headline: Resource gathering and gear progression lead to a fatal descent into the Dungeon.  Meaningful events (ordered): 1. [t+8] Opens a chest on Floor 1, obtaining an arrow and more torches. 2. [t+28] Begins a ...<snip>"
-1450,oracle_privileged,oracle,ok,21.336872,1550583,2473,868729,655,869384,,Headline: Resource Mastery and Floor Descent Followed by a Fatal Ambush on Floor 2  Meaningful events (ordered): 1. [t+4] Reaches Health=8 and begins exploring the cavernous paths of Floor 1. 2. [t+45] Fully repl ...<snip>

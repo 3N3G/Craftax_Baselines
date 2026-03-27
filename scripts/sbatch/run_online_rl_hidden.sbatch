@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=online_rl_hidden
 #SBATCH --partition=rl
-#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:RTX_PRO_6000
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
@@ -14,8 +13,7 @@
 set -e
 
 source ~/.bashrc
-ONLINE_RL_HIDDEN_ENV_PATH="${ONLINE_RL_HIDDEN_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
-conda activate "${ONLINE_RL_HIDDEN_ENV_PATH}"  # Updated to use vLLM environment
+conda activate craftax_fast_llm  # Updated to use vLLM environment
 
 mkdir -p logs
 cd ~/Craftax_Baselines

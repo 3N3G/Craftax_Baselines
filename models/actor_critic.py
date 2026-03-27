@@ -305,11 +305,16 @@ class ActorCriticConvImAug(nn.Module):
 
 
 class ActorCriticAug(nn.Module):
-    """Single augmented architecture used for both online and offline runs.
-
-    Actor and critic do not share a backbone:
-    - actor: obs->512, hidden->512, concat, 512, 512, action logits
-    - critic: obs->512, hidden->512, concat, 512, 512, value
+    """Symbolic MLP encoder + LLM hidden state augmentation.
+    
+    Architecture matches ActorCritic's MLP encoder, but concatenates
+    the LLM hidden state embedding before the actor/critic heads.
+    This is the symbolic observation equivalent of ActorCriticConvImAug.
+    
+    Args:
+        action_dim: Number of discrete actions
+        layer_width: Width of MLP layers (default 512)
+        hidden_state_dim: Dimension of LLM hidden states (default 2560 for Qwen)
     """
     action_dim: Sequence[int]
     layer_width: int = 512
@@ -323,83 +328,61 @@ class ActorCriticAug(nn.Module):
         else:
             activation = nn.tanh
 
-        actor_obs = nn.Dense(
+        # MLP encoder for symbolic observation (same as ActorCritic)
+        embedding = nn.Dense(
             self.layer_width,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-            name="actor_obs_fc1",
         )(obs)
-        actor_obs = activation(actor_obs)
+        embedding = activation(embedding)
 
-        actor_hidden = nn.Dense(
+        embedding = nn.Dense(
             self.layer_width,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-            name="actor_hidden_fc1",
-        )(hidden_state)
-        actor_hidden = activation(actor_hidden)
+        )(embedding)
+        embedding = activation(embedding)
 
-        actor_combined = jnp.concatenate([actor_obs, actor_hidden], axis=-1)
+        embedding = nn.Dense(
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(embedding)
+        embedding = activation(embedding)
+
+        # Concatenate with LLM hidden state
+        combined = jnp.concatenate([embedding, hidden_state], axis=-1)
+
+        # Actor head on combined embedding
         actor_mean = nn.Dense(
             self.layer_width,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-            name="actor_fc1",
-        )(actor_combined)
+        )(combined)
         actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(
-            self.layer_width,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_fc2",
-        )(actor_mean)
-        actor_mean = activation(actor_mean)
 
         actor_mean = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
-            name="actor_out",
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
         pi = distrax.Categorical(logits=actor_mean)
 
-        critic_obs = nn.Dense(
-            self.layer_width,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_obs_fc1",
-        )(obs)
-        critic_obs = activation(critic_obs)
-
-        critic_hidden = nn.Dense(
-            self.layer_width,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_hidden_fc1",
-        )(hidden_state)
-        critic_hidden = activation(critic_hidden)
-
-        critic_combined = jnp.concatenate([critic_obs, critic_hidden], axis=-1)
+        # Critic head on combined embedding
         critic = nn.Dense(
             self.layer_width,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-            name="critic_fc1",
-        )(critic_combined)
-        critic = activation(critic)
-        critic = nn.Dense(
-            self.layer_width,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_fc2",
-        )(critic)
+        )(combined)
         critic = activation(critic)
 
         critic = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
+            self.layer_width,
+            kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
-            name="critic_out",
         )(critic)
+        critic = activation(critic)
+
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            critic
+        )
 
         return pi, jnp.squeeze(critic, axis=-1)

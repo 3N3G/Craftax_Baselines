@@ -4,7 +4,6 @@
 #SBATCH --error=logs/ppo_video_%j.err
 #SBATCH --time=12:00:00
 #SBATCH --partition=rl
-#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 
@@ -28,7 +27,7 @@ python online_rl/ppo.py \
     --save_video_every 4096 \
     --total_timesteps 1e8 \
     --num_envs 128 \
-    --wandb_project "${WANDB_PROJECT:-unaugmented_craftax_ppo}" \
+    --wandb_project symbolic_video \
     --wandb_entity iris-sobolmark \
     --video_save_path ./videos
 

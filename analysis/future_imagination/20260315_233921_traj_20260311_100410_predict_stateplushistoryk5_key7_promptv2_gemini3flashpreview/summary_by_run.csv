@@ -1,3 +1,0 @@
-run_id,role,description,num_records,num_ok,num_errors,latency_mean_s,prompt_tokens_total,completion_tokens_total
-predict_history_k5,predict,Future imagination from last k=5 filtered observations at key inspection timesteps,7,7,0,2.8179562857142857,35240,2184
-predict_state_only,predict,Future imagination from current state only at key inspection timesteps,7,7,0,3.0068037142857142,10034,2460

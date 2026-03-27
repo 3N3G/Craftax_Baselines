@@ -7,7 +7,6 @@
 | [LLM Labelling](llm_labelling.md) | Complete workflow for generating and labelling trajectory data |
 | [Online RL Optimization](online_rl_optimization.md) | Architecture analysis and optimization plan for online RL with LLM hidden states |
 | [Progress Journal](progress_journal.md) | Running log of experiments and results |
-| [Codex Agent Handoff](CODEX_AGENT_HANDOFF.md) | Current operational handoff for new Codex agents (active runs, health checks, relaunch flow) |
 | [Symbolic to Pixels](symbolic_to_pixels.md) | How to render symbolic observations for evaluation |
 
 ## Key Files
