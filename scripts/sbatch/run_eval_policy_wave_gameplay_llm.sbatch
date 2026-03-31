@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=eval_wave_llm
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G

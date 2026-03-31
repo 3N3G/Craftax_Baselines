@@ -1,0 +1,2 @@
+run_id,role,description,num_records,num_ok,num_errors,latency_mean_s,prompt_tokens_total,completion_tokens_total
+oracle_privileged,oracle,"Narrative oracle summary from current state through privileged future trajectory (stride=2 snapshots, capped for <1M tokens)",5,5,0,13.047245,3144217,2768

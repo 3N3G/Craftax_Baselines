@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=wavev2_report
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
@@ -26,11 +27,10 @@ cd ~/Craftax_Baselines
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 
-if command -v conda >/dev/null 2>&1; then
-    conda activate /data/user_data/geney/.conda/envs/craftax >/dev/null 2>&1 \
-        || conda activate craftax >/dev/null 2>&1 \
-        || true
-fi
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
+REPORT_ENV_PATH="${REPORT_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax}"
+sbatch_activate_conda_env "policy-wave-report" "${REPORT_ENV_PATH}"
 
 SUMMARY_JSON="${SUMMARY_JSON:-analysis/policy_wave_v2/policy_wave_v2_summary.json}"
 OUTPUT_MD="${OUTPUT_MD:-analysis/reports/policy_wave_v2_report.md}"
@@ -38,4 +38,3 @@ OUTPUT_MD="${OUTPUT_MD:-analysis/reports/policy_wave_v2_report.md}"
 python -u analysis/reports/generate_policy_wave_v2_report.py \
     --summary_json "${SUMMARY_JSON}" \
     --output_md "${OUTPUT_MD}"
-

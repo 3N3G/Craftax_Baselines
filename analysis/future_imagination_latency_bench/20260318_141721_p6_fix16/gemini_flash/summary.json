@@ -1,0 +1,28 @@
+[
+  {
+    "model": "gemini-3-flash-preview",
+    "variant": "predict_history_k5",
+    "calls": 7,
+    "ok_calls": 7,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 2.0161387142857143,
+    "avg_requests_per_second": 0.4959976180777244,
+    "avg_end_to_end_latency_seconds": 2.0161387142857143,
+    "avg_end_to_end_responses_per_second": 0.4959976180777244,
+    "avg_hidden_file_load_seconds": null,
+    "avg_completion_tokens": 9.857142857142858
+  },
+  {
+    "model": "gemini-3-flash-preview",
+    "variant": "predict_state_only",
+    "calls": 7,
+    "ok_calls": 7,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 2.028574285714286,
+    "avg_requests_per_second": 0.49295705217316593,
+    "avg_end_to_end_latency_seconds": 2.028574285714286,
+    "avg_end_to_end_responses_per_second": 0.49295705217316593,
+    "avg_hidden_file_load_seconds": null,
+    "avg_completion_tokens": 9.857142857142858
+  }
+]

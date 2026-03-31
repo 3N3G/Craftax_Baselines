@@ -12,11 +12,11 @@ set -eo pipefail
 
 cd /home/geney/Craftax_Baselines
 source ~/.bashrc >/dev/null 2>&1 || true
-if command -v conda >/dev/null 2>&1; then
-    conda activate craftax_fast_llm >/dev/null 2>&1 \
-        || conda activate /data/user_data/geney/.conda/envs/craftax_fast_llm >/dev/null 2>&1 \
-        || true
-fi
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
+
+EVAL_ENV_PATH="${EVAL_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
+sbatch_activate_conda_env "offline-llm-eval" "${EVAL_ENV_PATH}"
 
 CHECKPOINT="${CHECKPOINT:-}"
 if [[ -z "${CHECKPOINT}" ]]; then

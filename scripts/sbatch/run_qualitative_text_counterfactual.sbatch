@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=qual_text_cf
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
@@ -28,10 +29,8 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "ERROR: conda not found after sourcing bashrc"
-    exit 1
-fi
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
 
 MANIFEST="${MANIFEST:-configs/eval/policy_text_counterfactual_5policies.yaml}"
 POLICY_IDS="${POLICY_IDS:-}"
@@ -46,7 +45,8 @@ START_VLLM="${START_VLLM:-1}"
 VLLM_SAFE_MODE="${VLLM_SAFE_MODE:-0}"
 VLLM_PORT_BASE="${VLLM_PORT_BASE:-21000}"
 VLLM_EXPECTED_MODEL="${VLLM_EXPECTED_MODEL:-./configs/vllm_hidden_qwen4b}"
-EVAL_ENV_CANDIDATES="${EVAL_ENV_CANDIDATES:-/data/user_data/geney/.conda/envs/imaug,imaug,/data/user_data/geney/.conda/envs/test,test,/data/user_data/geney/.conda/envs/craftax_fast_llm,craftax_fast_llm,/data/user_data/geney/.conda/envs/craftax,craftax,base}"
+EVAL_ENV_PATH="${EVAL_ENV_PATH:-/data/user_data/geney/.conda/envs/imaug}"
+VLLM_ENV_PATH="${VLLM_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
 
 if [[ "${PREVIEW_ONLY}" == "1" ]]; then
     START_VLLM=0
@@ -87,8 +87,6 @@ find_open_port() {
 }
 
 # Precheck eval env before expensive startup.
-PRECHECK_EVAL_ENV_OK=0
-PRECHECK_EVAL_ENV=""
 PRECHECK_MODS='import importlib
 mods = [
     "torch", "jax", "craftax", "flax", "optax", "orbax.checkpoint", "distrax",
@@ -104,34 +102,19 @@ if missing:
     raise SystemExit("\\n".join(missing))
 print("python_import_check_ok")
 '
-IFS=',' read -r -a _precheck_candidates <<< "${EVAL_ENV_CANDIDATES}"
-for _raw in "${_precheck_candidates[@]}"; do
-    _candidate="$(echo "${_raw}" | xargs)"
-    [[ -z "${_candidate}" ]] && continue
-    if ! conda activate "${_candidate}" >/dev/null 2>&1; then
-        continue
-    fi
-    if python - <<PY >/dev/null 2>&1
+sbatch_activate_conda_env "qualitative-precheck" "${EVAL_ENV_PATH}"
+if ! python - <<PY >/dev/null 2>&1
 ${PRECHECK_MODS}
 PY
-    then
-        PRECHECK_EVAL_ENV_OK=1
-        PRECHECK_EVAL_ENV="${_candidate}"
-        break
-    fi
-done
-if [[ ${PRECHECK_EVAL_ENV_OK} -ne 1 ]]; then
-    echo "ERROR: no usable eval env found during precheck."
-    echo "Tried candidates: ${EVAL_ENV_CANDIDATES}"
-    conda env list || true
+then
+    echo "ERROR: qualitative eval env import precheck failed for ${EVAL_ENV_PATH}"
     exit 1
 fi
-echo "Precheck selected eval env: ${PRECHECK_EVAL_ENV}"
+echo "Precheck selected eval env: ${EVAL_ENV_PATH}"
+conda deactivate >/dev/null 2>&1 || true
 
 if [[ "${START_VLLM}" == "1" ]]; then
-    if ! conda activate /data/user_data/geney/.conda/envs/craftax_fast_llm >/dev/null 2>&1; then
-        conda activate craftax_fast_llm >/dev/null 2>&1 || conda activate base >/dev/null 2>&1
-    fi
+    sbatch_activate_conda_env "vllm-server" "${VLLM_ENV_PATH}"
 
     JOB_SUFFIX=$((SLURM_JOB_ID % 1000))
     DESIRED_PORT=$((VLLM_PORT_BASE + JOB_SUFFIX * 20))
@@ -203,45 +186,7 @@ else
     echo "START_VLLM=0: skipping vLLM startup."
 fi
 
-activate_eval_env() {
-    local py_check='import importlib
-mods = [
-    "torch", "jax", "craftax", "flax", "optax", "orbax.checkpoint", "distrax",
-    "matplotlib", "requests", "yaml",
-]
-missing = []
-for m in mods:
-    try:
-        importlib.import_module(m)
-    except Exception as exc:
-        missing.append(f"{m}: {exc.__class__.__name__}: {exc}")
-if missing:
-    raise SystemExit("\\n".join(missing))
-print("python_import_check_ok")
-'
-    local raw candidate
-    IFS=',' read -r -a candidates <<< "${EVAL_ENV_CANDIDATES}"
-    for raw in "${candidates[@]}"; do
-        candidate="$(echo "${raw}" | xargs)"
-        [[ -z "${candidate}" ]] && continue
-        if ! conda activate "${candidate}" >/dev/null 2>&1; then
-            continue
-        fi
-        if python - <<PY >/dev/null 2>&1
-${py_check}
-PY
-        then
-            echo "Activated conda env for qualitative eval: ${candidate}"
-            return 0
-        fi
-    done
-    echo "ERROR: failed to find eval env with required modules."
-    echo "Tried candidates: ${EVAL_ENV_CANDIDATES}"
-    conda env list || true
-    return 1
-}
-
-activate_eval_env
+sbatch_activate_conda_env "qualitative-eval" "${EVAL_ENV_PATH}"
 
 mkdir -p "${OUTPUT_DIR}"
 

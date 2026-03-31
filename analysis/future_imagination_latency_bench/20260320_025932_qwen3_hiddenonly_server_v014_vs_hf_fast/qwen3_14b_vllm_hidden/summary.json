@@ -1,0 +1,32 @@
+[
+  {
+    "model": "configs/vllm_hidden_qwen3_14b_auto4",
+    "variant": "predict_history_k5",
+    "calls": 3,
+    "ok_calls": 3,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 0.078295,
+    "avg_requests_per_second": 12.772207676096812,
+    "avg_end_to_end_latency_seconds": 0.079888,
+    "avg_end_to_end_responses_per_second": 12.517524534348086,
+    "avg_hidden_file_load_seconds": 0.001593,
+    "avg_completion_tokens": 1,
+    "avg_prompt_tokens": 6395,
+    "avg_total_tokens": 6396
+  },
+  {
+    "model": "configs/vllm_hidden_qwen3_14b_auto4",
+    "variant": "predict_state_only",
+    "calls": 3,
+    "ok_calls": 3,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 0.060609666666666666,
+    "avg_requests_per_second": 16.49901830841065,
+    "avg_end_to_end_latency_seconds": 0.060919,
+    "avg_end_to_end_responses_per_second": 16.415239908731266,
+    "avg_hidden_file_load_seconds": 0.00030933333333333334,
+    "avg_completion_tokens": 1,
+    "avg_prompt_tokens": 1626,
+    "avg_total_tokens": 1627
+  }
+]

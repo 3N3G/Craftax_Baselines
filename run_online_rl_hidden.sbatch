@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=online_rl_hidden
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:RTX_PRO_6000
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G

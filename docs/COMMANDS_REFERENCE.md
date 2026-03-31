@@ -87,6 +87,9 @@ python online_rl/ppo.py --save_trajectory --save_trajectory_every 100
 
 # Submit to SLURM
 sbatch scripts/sbatch/run_ppo_symbolic.sbatch
+
+# Symbolic PPO checkpointed training (default W&B project: unaugmented_craftax_ppo)
+sbatch scripts/sbatch/run_ppo_symbolic_policy.sbatch
 ```
 
 ### Offline AWR (PyTorch)
@@ -140,6 +143,17 @@ sbatch scripts/sbatch/run_online_rl_hidden_jax.sbatch 128 100000000 25 -1 1 64 1
 bash scripts/clear_vllm_cache.sh
 ```
 
+### CoT Log Health + Rendering
+```bash
+# Check for hidden-state extraction failures in a running job log
+rg -n "Failed to load hidden state|hidden_states_path missing|Traceback|ERROR" logs/online_rl_hidden_jax_<jobid>.out
+
+# Render a CoT JSONL log to markdown (use compute node if source is under /data)
+python3 scripts/render_cot_jsonl_to_markdown.py \
+    --input /data/group_data/rl/geney/online_rl_hidden_models/cot_logs/<run>.jsonl \
+    --output logs/<run>.md
+```
+
 ---
 
 ## Evaluation
@@ -154,6 +168,7 @@ python scripts/eval_symbolic_policy_suite.py \
     --target-episodes 128
 
 # Cluster run
+# default W&B project: craftax_symbolic_evals
 sbatch scripts/sbatch/run_symbolic_policy_evals.sbatch
 
 # PPO-only rerun (no vLLM needed)

@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=eval_bundle_llm
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
@@ -26,11 +27,10 @@ cd ~/Craftax_Baselines
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 
-if command -v conda >/dev/null 2>&1; then
-    conda activate /data/user_data/geney/.conda/envs/craftax >/dev/null 2>&1 \
-        || conda activate craftax >/dev/null 2>&1 \
-        || true
-fi
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
+EVAL_ENV_PATH="${EVAL_ENV_PATH:-/data/user_data/geney/.conda/envs/imaug}"
+sbatch_activate_conda_env "eval-bundle-llm" "${EVAL_ENV_PATH}"
 
 MANIFEST="${MANIFEST:-configs/eval/policy_wave_v2.yaml}"
 OUTPUT_DIR="${OUTPUT_DIR:-analysis/policy_wave_v2/bundle_reactions}"
@@ -57,4 +57,3 @@ fi
 printf '  %q' "${CMD[@]}"
 echo
 "${CMD[@]}"
-
