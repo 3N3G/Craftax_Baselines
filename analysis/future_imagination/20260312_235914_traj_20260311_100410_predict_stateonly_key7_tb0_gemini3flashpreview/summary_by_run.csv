@@ -1,0 +1,2 @@
+run_id,role,description,num_records,num_ok,num_errors,latency_mean_s,prompt_tokens_total,completion_tokens_total
+predict_state_only,predict,Future imagination from current state only at key inspection timesteps,7,7,0,3.5511951428571433,13839,2785

@@ -1,0 +1,301 @@
+# Combined Future Report (Unabridged)
+
+- Generated: `2026-03-12T12:40:40.204229`
+- Entries: `7`
+
+## 1. t=0, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `16.983328`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926/prompts/oracle_privileged/t_00000.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 0
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 0 / 2334
+
+Current state:
+Map (interesting tiles only): 2, -4:tree, -3, -3:tree, 1, -3:tree, -2, -2:tree, -5, -1:water, -5, 0:water, -5, 1:water, 1, 1:tree, 5, 1:tree, -5, 2:water, -1, 2:tree, 2, 2:tree, 3, 3:tree, 2, 4:tree
+Stats: Health=9, Food=9, Drink=9, Energy=9, Mana=9, XP=0
+Direction=up, Floor=0, LadderOpen=True
+Inventory+: (none)
+Action@t=RIGHT, Reward@t=0, Done@t=False
+
+Privileged future trajectory evidence:
+Note: snapshots are sampled every 2 environment steps (stride=2).
+[FUTURE
+...<snip>
+```
+
+### Response (Full)
+```text
+Headline: Resource Gathering and Dungeon Crawling through Multiple Floors
+
+Meaningful events (ordered):
+1. [t+28]
+```
+
+## 2. t=283, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `17.741058`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926/prompts/oracle_privileged/t_00283.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 283
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 283 / 2334
+
+Current state:
+Map (interesting tiles only): 3, -4:stone, 4, -4:path, 5, -4:path, 3, -3:stone, 4, -3:stone, 5, -3:path, 2, -2:path, 3, -2:path, 4, -2:path, 5, -2:path, 2, -1:path, 3, -1:path, 4, -1:path, 5, -1:path, 1, 0:Cow on path, 2, 0:path, 3, 0:path, 4, 0:path, 5, 0:path, 0, 1:path, 1, 1:path, 2, 1:path, 3, 1:path, 4, 1:path, 5, 1:path, 0, 2:path, 1, 2:path, 2, 2:path, 3, 2:path, 4, 2:path, 5, 2:path, -1, 3:path, 0, 3:path, 1, 3:path, 2, 3:path, 3, 3:path, 4, 3:path, 5,
+...<snip>
+```
+
+### Response (Full)
+```text
+t=2193:* They finally descend to Floor 2 (t=2193
+```
+
+## 3. t=298, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `19.842779`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926/prompts/oracle_privileged/t_00298.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 298
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 298 / 2334
+
+Current state:
+Map (interesting tiles only): -5, -4:wall, -4, -4:wall, -3, -4:wall, -2, -4:wall, -1, -4:wall_moss, 0, -4:wall_moss, 1, -4:wall, 2, -4:wall, 3, -4:wall, 4, -4:wall, 5, -4:wall, -5, -3:path, -4, -3:path, -3, -3:path, -2, -3:torch on path, -1, -3:path, 0, -3:path, 1, -3:path, 2, -3:path, 3, -3:path, 4, -3:path, 5, -3:path, -5, -2:wall, -4, -2:wall_moss, -3, -2:wall_moss, -2, -2:path, -1, -2:path, 0, -2:path, 1, -2:path, 2, -2:path, 3, -2:path, 4, -2:path, 5, -2:
+...<snip>
+```
+
+### Response (Full)
+```text
+Headline: A long struggle for survival on Floor 1 ends in a descent to Floor 2, where the
+```
+
+## 4. t=1310, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `17.868394`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_additional_longcontext_gemini3flashpreview_20260312_123049`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_additional_longcontext_gemini3flashpreview_20260312_123049/prompts/oracle_privileged/t_01310.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 1310
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 1310 / 2334
+
+Current state:
+Map (interesting tiles only): -5, -4:darkness, -4, -4:darkness, -3, -4:wall, -2, -4:path, -1, -4:wall, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:darkness, -3, -3:wall, -2, -3:path, -1, -3:wall, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:wall, -4, -2:wall, -3, -2:wall, -2, -2:path, -1, -2:wall, 0, -2:wall, 1, -2:wall_moss, 
+...<snip>
+```
+
+### Response (Full)
+```text
+ (Skipping ahead to find major transitions)
+    *   *t=1779:* Opens a chest (Reward +
+```
+
+## 5. t=1450, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `13.253732`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_additional_longcontext_gemini3flashpreview_20260312_123049`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_additional_longcontext_gemini3flashpreview_20260312_123049/prompts/oracle_privileged/t_01450.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 1450
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 1450 / 2334
+
+Current state:
+Map (interesting tiles only): -5, -4:wall, -4, -4:wall, -3, -4:path, -2, -4:wall, -1, -4:wall, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:wall, -3, -3:path, -2, -3:wall, -1, -3:darkness, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:darkness, -4, -2:wall, -3, -2:path, -2, -2:wall, -1, -2:darkness, 0, -2:darkness, 1, -2:darknes
+...<snip>
+```
+
+### Response (Full)
+```text
+Headline: Resource gathering and equipment upgrades lead to a descent into the dungeon's second floor.
+
+Meaningful events (ordered):
+```
+
+## 6. t=2180, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `6.758335`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926/prompts/oracle_privileged/t_02180.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 2180
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 2180 / 2334
+
+Current state:
+Map (interesting tiles only): -5, -4:darkness, -4, -4:wall, -3, -4:path, -2, -4:wall, -1, -4:darkness, 0, -4:darkness, 1, -4:darkness, 2, -4:darkness, 3, -4:darkness, 4, -4:darkness, 5, -4:darkness, -5, -3:darkness, -4, -3:wall, -3, -3:path, -2, -3:wall, -1, -3:darkness, 0, -3:darkness, 1, -3:darkness, 2, -3:darkness, 3, -3:darkness, 4, -3:darkness, 5, -3:darkness, -5, -2:darkness, -4, -2:wall_moss, -3, -2:path, -2, -2:wall, -1, -2:wall, 0, -2:wall, 1, -2:wa
+...<snip>
+```
+
+### Response (Full)
+```text
+Mining and Resource Gathering:* On Floor 2, the player focuses heavily on mining stone and coal. They find a sapphire and a second diamond
+```
+
+## 7. t=2195, run_id=oracle_privileged
+- status: `ok`
+- latency_s: `5.835488`
+- source_run_dir: `/Users/gene/Documents/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926`
+- prompt_path: `/home/geney/Craftax_Baselines/analysis/future_imagination/oracle_key5_stride2_cap1110_gemini3flashpreview_20260312_122926/prompts/oracle_privileged/t_02195.txt`
+
+### Prompt (Full)
+```text
+You are writing a human-readable narrative summary of a Craftax trajectory from one timestep onward.
+
+Game rules (relevant subset):
+1) Coordinates are (Row, Column). Negative Row is UP, positive Row is DOWN. Negative Column is LEFT, positive Column is RIGHT.
+2) The player is centered at (0,0) in each observation.
+3) The DO action only affects the tile directly in front of the player, based on current Direction.
+4) Intrinsics: Health, Food, Drink, Energy, Mana. If Food/Drink/Energy hit 0, Health decays.
+5) Survival loop: maintain Food/Drink/Energy to keep Health stable.
+6) Progression loop: find ladder and descend through floors; after overworld, ladder typically requires kills to open.
+7) Resource loop: gather wood/stone/ore, craft tools/weapons/armor, then progress.
+
+You are given:
+- the current state at timestep 2195
+- privileged future trajectory evidence from this point onward
+
+Your goal:
+- summarize what actually happens next in this trajectory as a coherent narrative
+- make it easy for a human to read, compare, and reason about
+
+Trajectory: traj_20260311_100410
+Current timestep: 2195 / 2334
+
+Current state:
+Map (interesting tiles only): -5, -4:Darkness, -4, -4:Darkness, -3, -4:Darkness, -2, -4:path, -1, -4:path, 0, -4:path, 1, -4:path, 2, -4:path, 3, -4:Darkness, 4, -4:Darkness, 5, -4:Darkness, -5, -3:Darkness, -4, -3:Darkness, -3, -3:path, -2, -3:path, -1, -3:path, 0, -3:path, 1, -3:path, 2, -3:path, 3, -3:path, 4, -3:Darkness, 5, -3:Darkness, -5, -2:Darkness, -4, -2:path, -3, -2:path, -2, -2:path, -1, -2:path, 0, -2:path, 1, -2:path, 2, -2:path, 3, -2:path, 4
+...<snip>
+```
+
+### Response (Full)
+```text
+Headline: Resource gathering and equipment upgrades on Floor 2 end in a fatal encounter.
+
+Meaningful events (ordered):
+1. [
+```

@@ -30,6 +30,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorBase_V1,
     KVConnectorMetadata,
     KVConnectorRole,
+    SupportsHMA,
 )
 from vllm.logger import init_logger
 from vllm.v1.attention.backends.mla.common import MLACommonMetadata
@@ -98,7 +99,7 @@ class ExampleHiddenStatesConnectorMetadata(KVConnectorMetadata):
         )
 
 
-class ExampleHiddenStatesConnector(KVConnectorBase_V1):
+class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
     """
     KV Connector that extracts hidden states from CacheOnlyAttentionLayers.
 
@@ -188,10 +189,53 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1):
         connector_metadata = self._get_connector_metadata()
         assert isinstance(connector_metadata, ExampleHiddenStatesConnectorMetadata)
         os.makedirs(self._storage_path, exist_ok=True)
+        attn_slot_mapping = getattr(attn_metadata, "slot_mapping", None)
+        cursor = 0
+        if isinstance(attn_metadata, MLACommonMetadata):
+            kv_capacity = int(kv_layer.shape[0] * kv_layer.shape[1])
+        else:
+            kv_capacity = int(kv_layer.shape[1] * kv_layer.shape[2])
 
         for request in connector_metadata.requests:
+            req_num_tokens = int(request.num_tokens)
+            req_slot_mapping = request.slot_mapping[:req_num_tokens]
+            req_token_ids = request.token_ids[: req_slot_mapping.shape[0]]
+            if isinstance(attn_slot_mapping, torch.Tensor):
+                slot_count = int(req_slot_mapping.shape[0])
+                candidate = attn_slot_mapping[cursor : cursor + slot_count]
+                cursor += slot_count
+                if candidate.numel() > 0:
+                    req_slot_mapping = candidate
+                    req_token_ids = req_token_ids[: candidate.shape[0]]
+            valid_mask = (req_slot_mapping >= 0) & (req_slot_mapping < kv_capacity)
+            if valid_mask.numel() == 0 or not bool(valid_mask.any().item()):
+                logger.warning(
+                    "No valid slot mappings for req %s (kv_capacity=%d, num_slots=%d)",
+                    getattr(request, "req_id", "<unknown>"),
+                    kv_capacity,
+                    int(req_slot_mapping.numel()),
+                )
+                continue
+            if not bool(valid_mask.all().item()):
+                num_dropped = int((~valid_mask).sum().item())
+                slot_min = int(req_slot_mapping.min().item())
+                slot_max = int(req_slot_mapping.max().item())
+                logger.warning(
+                    "Dropping %d invalid slot mappings for req %s (kv_capacity=%d, slot_min=%d, slot_max=%d)",
+                    num_dropped,
+                    getattr(request, "req_id", "<unknown>"),
+                    kv_capacity,
+                    slot_min,
+                    slot_max,
+                )
+                req_slot_mapping = req_slot_mapping[valid_mask]
+                req_token_ids = req_token_ids[valid_mask.detach().cpu()]
+            if self._mode == "last_token" and req_slot_mapping.numel() > 1:
+                req_slot_mapping = req_slot_mapping[-1:]
+                req_token_ids = req_token_ids[-1:]
+            req_num_tokens = int(req_slot_mapping.shape[0])
             kv_cache = extract_kv_from_layer(
-                kv_layer, request.slot_mapping, request.num_tokens
+                kv_layer, req_slot_mapping, req_num_tokens
             )
             hidden_states = reshape_hidden_states_from_kv_cache(
                 kv_cache, self.num_hidden_states
@@ -204,7 +248,7 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1):
 
             tensors = {
                 "hidden_states": hidden_states.detach().cpu(),
-                "token_ids": request.token_ids[:request.num_tokens].detach().cpu(),
+                "token_ids": req_token_ids[:req_num_tokens].detach().cpu(),
             }
             safetensors.torch.save_file(tensors, request.filename)
 
@@ -252,8 +296,20 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1):
         req_filename = self._request_filenames.pop(req_id, None)
         return False, {"hidden_states_path": req_filename}
 
+    def request_finished_all_groups(
+        self,
+        request: "Request",
+        block_ids: tuple[list[int], ...],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        # HMA path: hidden-state artifact is keyed by request id and does not
+        # depend on per-group block ids, so we can reuse the single-group logic.
+        primary_group = block_ids[0] if block_ids else []
+        return self.request_finished(request, primary_group)
+
     def clear_connector_metadata(self):
-        pass
+        # Request metadata must be cleared between engine steps. Leaving stale
+        # connector metadata around can corrupt the next request's slot mapping.
+        self._connector_metadata = None
 
     def real_clear_connector_metadata(self):
         self._connector_metadata = None

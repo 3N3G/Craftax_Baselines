@@ -3,6 +3,7 @@
 #SBATCH --output=/home/geney/Craftax_Baselines/logs/awr_llm_offline_%j.out
 #SBATCH --error=/home/geney/Craftax_Baselines/logs/awr_llm_offline_%j.err
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=128G
@@ -15,26 +16,13 @@ echo "Starting offline AWR-LLM job on $(hostname) at $(date)"
 cd /home/geney/Craftax_Baselines
 mkdir -p logs
 
-ENV_PATH_DEFAULT="/data/user_data/geney/.conda/envs/craftax_fast_llm"
-ENV_BIN_DEFAULT="${ENV_PATH_DEFAULT}/bin"
-
-if [[ -d "${ENV_BIN_DEFAULT}" ]]; then
-    export PATH="${ENV_BIN_DEFAULT}:${PATH}"
+if [[ -f "${HOME}/.bashrc" ]]; then
+    source "${HOME}/.bashrc" >/dev/null 2>&1 || true
 fi
-
-if ! command -v python >/dev/null 2>&1; then
-    if [[ -f "${HOME}/.bashrc" ]]; then
-        source "${HOME}/.bashrc" >/dev/null 2>&1 || true
-    fi
-    if command -v conda >/dev/null 2>&1; then
-        conda activate "${ENV_PATH_DEFAULT}" >/dev/null 2>&1 || conda activate craftax_fast_llm >/dev/null 2>&1 || true
-    fi
-fi
-
-if ! command -v python >/dev/null 2>&1; then
-    echo "ERROR: python is not available after environment bootstrap."
-    exit 1
-fi
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
+TRAIN_ENV_PATH="${TRAIN_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
+sbatch_activate_conda_env "awr-llm-offline" "${TRAIN_ENV_PATH}"
 
 echo "Runtime python: $(command -v python)"
 python -V || true

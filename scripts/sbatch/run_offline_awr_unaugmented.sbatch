@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=awr_unaug
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
@@ -41,26 +42,8 @@ exec 2> >(tee -a "${RUNTIME_STDERR}" >&2)
 echo "Runtime log mirror: ${RUNTIME_STDOUT}"
 echo "Runtime error mirror: ${RUNTIME_STDERR}"
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "ERROR: conda not found after sourcing bashrc"
-    exit 1
-fi
-
-activate_conda_for() {
-    local purpose="$1"
-    shift
-    local env_name
-    for env_name in "$@"; do
-        if conda activate "${env_name}" >/dev/null 2>&1; then
-            echo "Activated conda env for ${purpose}: ${env_name}"
-            return 0
-        fi
-    done
-    echo "ERROR: failed to activate conda env for ${purpose}"
-    echo "Tried: $*"
-    conda env list || true
-    return 1
-}
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
 
 on_error() {
     local rc=$?
@@ -71,12 +54,8 @@ trap on_error ERR
 
 # Activate training env
 echo "Activating training environment..."
-activate_conda_for "training" \
-    /data/user_data/geney/.conda/envs/imaug \
-    imaug \
-    /data/user_data/geney/.conda/envs/craftax \
-    craftax \
-    base
+TRAIN_ENV_PATH="${TRAIN_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
+sbatch_activate_conda_env "training" "${TRAIN_ENV_PATH}"
 
 # Verify imports
 python -c 'import torch; print(f"torch={torch.__version__}, cuda={torch.cuda.is_available()}")'

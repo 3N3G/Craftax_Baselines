@@ -886,3 +886,65 @@ Evaluate value function on curated observation states to understand what the LLM
   - explicit failure visibility in logs,
   - and non-destructive path-only syncs to Babel.
 - The current 300M skip5/skip25 and CoT stage queues were re-submitted with the fixed chain wrapper so continuation semantics remain correct over week-long execution.
+
+## 2026-03-10: CoT Prompting Iteration + Hidden-State Reliability Hardening
+
+### CoT logging + prompting updates
+- CoT logging was expanded in online training so samples are captured:
+  - updates `1..10`, then every `100` updates,
+  - text is logged as full prompt + full response (no character clipping when `max_chars=0`).
+- Added/used prompt variants:
+  - `default`
+  - `future_based`
+  - `future_based_opt` (compact forecast-first format)
+
+### Hidden-state extraction incident
+- Issue observed on `future_based_opt` run (`6523539`):
+  - repeated `Failed to load hidden state, using zero vector`.
+- Root cause:
+  - some `/v1/completions` responses can omit `kv_transfer_params.hidden_states_path`,
+  - even though hidden-state files may still exist on disk (`<completion_id>-*.safetensors`).
+
+### Fix implemented
+- `utils/llm_extractor.py` hardened to:
+  - resolve hidden-state files by completion ID fallback when path is missing,
+  - retry for file visibility/read races before zero-vector fallback,
+  - emit rate-limited warnings for missing paths/fallback counts.
+- Reliability rule added to `AGENTS.md` so future corrections follow this pattern.
+- Fix commit pushed: `24b9ea5`.
+
+### Recovery action
+- Failing run `6523539` was canceled and replaced by an identical configuration run:
+  - new job `6523695` (`future_based_opt`, skip25, tok256, stage60m chain-enabled).
+- Post-fix verification:
+  - run reaches training and checkpointing without hidden-state warning flood.
+
+### Active CoT snapshot at documentation update time
+- `6523164`: `future_based`, skip25/tok256
+- `6523165`: `default`, skip25/tok256
+- `6523695`: `future_based_opt`, skip25/tok256
+- All are running on `rl` with chain continuation enabled to `60M` target.
+
+### Documentation/handoff additions
+- Added `docs/CODEX_AGENT_HANDOFF.md` with:
+  - active job snapshot,
+  - hidden-state troubleshooting runbook,
+  - relaunch template,
+  - CoT log rendering instructions.
+- Added CoT log rendering utility:
+  - `scripts/render_cot_jsonl_to_markdown.py`
+  - used to render:
+    - `/data/group_data/rl/geney/online_rl_hidden_models/cot_logs/online-cot-more-future-based-opt-s25-tok256-stage60m-20260309_165005.jsonl`
+    - to:
+      - `/home/geney/Craftax_Baselines/logs/online-cot-more-future-based-opt-s25-tok256-stage60m-20260309_165005.md`
+
+## 2026-03-10: W&B Project Routing Defaults Updated
+
+- Eval routing kept/defaulted to:
+  - `craftax_symbolic_evals`
+  - primary launcher: `scripts/sbatch/run_symbolic_policy_evals.sbatch`
+- Symbolic PPO training routing updated to:
+  - `unaugmented_craftax_ppo`
+  - primary launcher: `scripts/sbatch/run_ppo_symbolic_policy.sbatch`
+- `scripts/sbatch/run_ppo_video.sbatch` now also defaults PPO logging to:
+  - `unaugmented_craftax_ppo` (override via `WANDB_PROJECT` when needed)

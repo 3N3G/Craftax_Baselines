@@ -1,0 +1,28 @@
+[
+  {
+    "model": "Qwen/Qwen3.5-9B",
+    "variant": "predict_history_k5",
+    "calls": 1,
+    "ok_calls": 1,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 23.535577,
+    "avg_requests_per_second": 0.04248886696085675,
+    "avg_end_to_end_latency_seconds": 55.728702,
+    "avg_end_to_end_responses_per_second": 0.01794407485033475,
+    "avg_hidden_file_load_seconds": 32.193125,
+    "avg_completion_tokens": 32
+  },
+  {
+    "model": "Qwen/Qwen3.5-9B",
+    "variant": "predict_state_only",
+    "calls": 1,
+    "ok_calls": 1,
+    "error_calls": 0,
+    "avg_request_latency_seconds": 1.612109,
+    "avg_requests_per_second": 0.6203054508100879,
+    "avg_end_to_end_latency_seconds": 2.119762,
+    "avg_end_to_end_responses_per_second": 0.4717510739413198,
+    "avg_hidden_file_load_seconds": 0.507653,
+    "avg_completion_tokens": 32
+  }
+]

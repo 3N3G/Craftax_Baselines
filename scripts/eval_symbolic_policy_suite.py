@@ -43,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from craftax.craftax.constants import BLOCK_PIXEL_SIZE_AGENT  # noqa: E402
+from craftax.craftax.constants import Achievement, BLOCK_PIXEL_SIZE_AGENT  # noqa: E402
 from craftax.craftax.renderer import render_craftax_pixels  # noqa: E402
 from craftax.craftax_env import make_craftax_env_from_name  # noqa: E402
 from labelling.obs_to_text import obs_to_text  # noqa: E402
@@ -58,6 +58,11 @@ try:
     import cv2  # type: ignore
 except Exception:
     cv2 = None
+
+ENTER_DUNGEON_ACH_IDX = next(
+    (idx for idx, ach in enumerate(Achievement) if ach.name.lower() == "enter_dungeon"),
+    None,
+)
 
 
 @dataclass
@@ -682,6 +687,74 @@ def _extract_done_episode_achievements(info: Dict, done_mask: np.ndarray) -> Tup
     return episode_counts, rates
 
 
+def _state_scalar(state, field_name: str, default: float = float("nan")) -> float:
+    if not hasattr(state, field_name):
+        return float(default)
+    try:
+        arr = np.asarray(jax.device_get(getattr(state, field_name)), dtype=np.float32)
+        if arr.size == 0:
+            return float(default)
+        return float(arr.reshape(-1)[0])
+    except Exception:
+        return float(default)
+
+
+def _infer_terminal_reason(done: bool, video_cap_reached: bool, health: float, food: float, drink: float) -> str:
+    if not done:
+        if video_cap_reached:
+            return "video_cap_reached"
+        return "rollout_incomplete"
+    if health <= 0.0:
+        if food <= 0.0 and drink <= 0.0:
+            return "hp_zero_with_empty_food_and_drink"
+        if drink <= 0.0:
+            return "likely_dehydration"
+        if food <= 0.0:
+            return "likely_starvation"
+        return "hp_depleted_unknown_cause"
+    return "terminal_non_hp_condition"
+
+
+def _terminal_diagnostics(state, done: bool, video_cap_reached: bool, last_info: Optional[Dict]) -> Dict[str, object]:
+    health = _state_scalar(state, "player_health")
+    food = _state_scalar(state, "player_food")
+    drink = _state_scalar(state, "player_drink")
+    energy = _state_scalar(state, "player_energy")
+    player_level = _state_scalar(state, "player_level")
+
+    discount = float("nan")
+    if last_info is not None and "discount" in last_info:
+        try:
+            discount = float(np.asarray(jax.device_get(last_info["discount"]), dtype=np.float32).reshape(-1)[0])
+        except Exception:
+            discount = float("nan")
+
+    return {
+        "terminal_reason": _infer_terminal_reason(done, video_cap_reached, health, food, drink),
+        "terminal_done": bool(done),
+        "video_cap_reached": bool(video_cap_reached),
+        "final_health": float(health),
+        "final_food": float(food),
+        "final_drink": float(drink),
+        "final_energy": float(energy),
+        "final_player_level": float(player_level),
+        "final_discount": float(discount),
+    }
+
+
+def _video_matches_highlight_criteria(diag: Dict[str, object], args) -> Tuple[bool, str]:
+    episode_return = float(diag.get("episode_return", float("-inf")))
+    hit_return = episode_return >= float(args.highlight_return_threshold)
+    hit_enter_dungeon = bool(diag.get("enter_dungeon_unlocked", False))
+    if hit_return and hit_enter_dungeon:
+        return True, "return_and_enter_dungeon"
+    if hit_return:
+        return True, "return_threshold"
+    if hit_enter_dungeon:
+        return True, "enter_dungeon"
+    return False, "none"
+
+
 def evaluate_policy(
     spec: PolicySpec,
     args,
@@ -846,11 +919,19 @@ def evaluate_policy(
     return metrics, policy
 
 
-def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LLMHiddenStateManager]):
+def rollout_video(
+    spec: PolicySpec,
+    policy: Dict,
+    args,
+    llm_manager: Optional[LLMHiddenStateManager],
+    seed_offset: int = 0,
+    record_video: bool = True,
+    max_steps_override: Optional[int] = None,
+):
     env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=False)
     env_params = env.default_params
 
-    rng = jax.random.PRNGKey(args.seed + 999)
+    rng = jax.random.PRNGKey(args.seed + 999 + int(seed_offset))
     rng, rr = jax.random.split(rng)
     obs, state = env.reset(rr, env_params)
 
@@ -872,8 +953,14 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
     llm_calls_hist: List[int] = []
     llm_text_hist: List[str] = []
     latest_llm_text = "LLM: (no generated text)"
+    last_info: Optional[Dict] = None
+    episode_done = False
+    max_video_steps = int(args.video_max_steps if max_steps_override is None else max_steps_override)
+    if max_video_steps <= 0:
+        max_video_steps = 1_000_000_000
+    enter_dungeon_unlocked = False
 
-    for step in range(args.video_max_steps):
+    for step in range(max_video_steps):
         if uses_hidden:
             if spec.hidden_mode == "llm":
                 if llm_manager is None:
@@ -883,42 +970,49 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
                     # hidden comes from the same manager.extract() prefill path.
                     hidden_raw, _ = llm_manager.extract(obs[None, ...], 1)
                     hidden = _normalize_hidden(hidden_raw, hidden_mean, hidden_std)
-                    generated_text = _generate_llm_text_for_video(
-                        llm_manager=llm_manager,
-                        obs_single=obs,
-                        max_new_tokens=args.video_llm_tokens,
-                    )
-                    latest_llm_text = _sanitize_llm_text(generated_text, max_words=args.video_llm_max_words)
+                    if record_video:
+                        generated_text = _generate_llm_text_for_video(
+                            llm_manager=llm_manager,
+                            obs_single=obs,
+                            max_new_tokens=args.video_llm_tokens,
+                        )
+                        latest_llm_text = _sanitize_llm_text(generated_text, max_words=args.video_llm_max_words)
                     llm_calls += 1
                     steps_since_llm = 0
             elif spec.hidden_mode == "zero":
                 hidden = jnp.zeros_like(hidden)
 
-        if uses_hidden:
-            value = float(
-                np.asarray(
-                    jax.device_get(policy["value_fn"](policy["params"], obs[None, ...], hidden)),
-                    dtype=np.float32,
-                )[0]
-            )
-        else:
-            value = float(
-                np.asarray(
-                    jax.device_get(policy["value_fn"](policy["params"], obs[None, ...])),
-                    dtype=np.float32,
-                )[0]
-            )
+        ach_vec = np.asarray(jax.device_get(state.achievements), dtype=np.float32).reshape(-1)
+        if ENTER_DUNGEON_ACH_IDX is not None and ENTER_DUNGEON_ACH_IDX < ach_vec.shape[0]:
+            if float(ach_vec[ENTER_DUNGEON_ACH_IDX]) > 0.0:
+                enter_dungeon_unlocked = True
 
-        frame = np.asarray(
-            render_craftax_pixels(state, BLOCK_PIXEL_SIZE_AGENT, do_night_noise=False),
-            dtype=np.uint8,
-        )
-        ach_count = int(np.asarray(jax.device_get(state.achievements)).sum())
-        raw_frames.append(frame)
-        ach_counts.append(ach_count)
-        llm_calls_hist.append(llm_calls)
-        llm_text_hist.append(latest_llm_text)
-        predicted_values.append(value)
+        if record_video:
+            if uses_hidden:
+                value = float(
+                    np.asarray(
+                        jax.device_get(policy["value_fn"](policy["params"], obs[None, ...], hidden)),
+                        dtype=np.float32,
+                    )[0]
+                )
+            else:
+                value = float(
+                    np.asarray(
+                        jax.device_get(policy["value_fn"](policy["params"], obs[None, ...])),
+                        dtype=np.float32,
+                    )[0]
+                )
+
+            frame = np.asarray(
+                render_craftax_pixels(state, BLOCK_PIXEL_SIZE_AGENT, do_night_noise=False),
+                dtype=np.uint8,
+            )
+            ach_count = int(ach_vec.sum())
+            raw_frames.append(frame)
+            ach_counts.append(ach_count)
+            llm_calls_hist.append(llm_calls)
+            llm_text_hist.append(latest_llm_text)
+            predicted_values.append(value)
 
         rng, ar = jax.random.split(rng)
         if uses_hidden:
@@ -929,11 +1023,27 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
 
         rng, sr = jax.random.split(rng)
         obs, state, reward, done, info = env.step(sr, state, action, env_params)
+        last_info = info
         ep_return += float(reward)
         rewards.append(float(reward))
 
         if bool(jax.device_get(done)):
+            episode_done = True
             break
+
+    video_cap_reached = (not episode_done) and (len(rewards) >= max_video_steps)
+    terminal_diag = _terminal_diagnostics(
+        state=state,
+        done=episode_done,
+        video_cap_reached=video_cap_reached,
+        last_info=last_info,
+    )
+    terminal_diag["episode_return"] = float(ep_return)
+    terminal_diag["episode_steps"] = int(len(rewards))
+    terminal_diag["enter_dungeon_unlocked"] = bool(enter_dungeon_unlocked)
+
+    if not record_video:
+        return {"video": None, "diagnostics": terminal_diag}
 
     if not raw_frames:
         return None
@@ -967,7 +1077,8 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
         cumulative_return += float(rewards[i])
         status = (
             f"{spec.name} | step={i} | return={cumulative_return:.2f} | "
-            f"achievements={ach_counts[i]} | llm_calls={llm_calls_hist[i]}"
+            f"achievements={ach_counts[i]} | llm_calls={llm_calls_hist[i]} | "
+            f"end={terminal_diag['terminal_reason']}"
         )
         frame = _render_video_frame(
             game_frame=raw_frames[i],
@@ -983,7 +1094,7 @@ def rollout_video(spec: PolicySpec, policy: Dict, args, llm_manager: Optional[LL
 
     video = np.stack(frames, axis=0)  # [T, H, W, C]
     video = np.transpose(video, (0, 3, 1, 2))  # [T, C, H, W]
-    return video
+    return {"video": video, "diagnostics": terminal_diag}
 
 
 def _get_llm_manager(
@@ -1122,8 +1233,43 @@ def main():
         default=1,
         help="Hidden-state extraction mode for policy conditioning (1 = no_cot/prefill path).",
     )
-    parser.add_argument("--video-max-steps", type=int, default=600)
+    parser.add_argument(
+        "--video-max-steps",
+        type=int,
+        default=1_000_000_000,
+        help="Per-video rollout cap. Default is effectively uncapped.",
+    )
     parser.add_argument("--video-fps", type=int, default=12)
+    parser.add_argument(
+        "--num-videos",
+        type=int,
+        default=10,
+        help="Number of rollout videos to log per evaluated policy.",
+    )
+    parser.add_argument(
+        "--num-highlight-videos",
+        type=int,
+        default=0,
+        help="Additional videos saved only when return>=threshold or enter_dungeon is unlocked.",
+    )
+    parser.add_argument(
+        "--highlight-return-threshold",
+        type=float,
+        default=25.0,
+        help="Return threshold for conditional highlight video capture.",
+    )
+    parser.add_argument(
+        "--highlight-video-max-attempts",
+        type=int,
+        default=128,
+        help="Max scout rollouts used to find highlight videos.",
+    )
+    parser.add_argument(
+        "--highlight-scout-max-steps",
+        type=int,
+        default=4000,
+        help="Max steps for scout rollouts used to find highlight videos.",
+    )
     parser.add_argument(
         "--video-llm-tokens",
         type=int,
@@ -1278,6 +1424,11 @@ def main():
             "max_env_steps": int(args.max_env_steps),
             "llm_tokens": int(args.llm_tokens),
             "video_max_steps": int(args.video_max_steps),
+            "num_videos": int(args.num_videos),
+            "num_highlight_videos": int(args.num_highlight_videos),
+            "highlight_return_threshold": float(args.highlight_return_threshold),
+            "highlight_video_max_attempts": int(args.highlight_video_max_attempts),
+            "highlight_scout_max_steps": int(args.highlight_scout_max_steps),
             "video_llm_tokens": int(args.video_llm_tokens),
             "video_llm_max_words": int(args.video_llm_max_words),
             "video_gamma": float(args.video_gamma),
@@ -1296,9 +1447,109 @@ def main():
         wandb.log(_training_scalar_summary(training_summary))
 
         if not args.no_video:
-            video = rollout_video(spec=spec, policy=policy, args=args, llm_manager=llm_manager)
-            if video is not None:
-                wandb.log({"eval/video": wandb.Video(video, fps=args.video_fps, format="mp4")})
+            video_count = max(1, int(args.num_videos))
+            highlight_target = max(0, int(args.num_highlight_videos))
+            highlight_max_attempts = max(highlight_target, int(args.highlight_video_max_attempts))
+            video_logs = {}
+            video_diagnostics: Dict[str, Dict[str, object]] = {}
+            highlight_diagnostics: Dict[str, Dict[str, object]] = {}
+            seed_cursor = 0
+            for i in range(video_count):
+                video_payload = rollout_video(
+                    spec=spec,
+                    policy=policy,
+                    args=args,
+                    llm_manager=llm_manager,
+                    seed_offset=seed_cursor,
+                    record_video=True,
+                )
+                seed_cursor += 1
+                if video_payload is None:
+                    continue
+                video = video_payload["video"]
+                diag = video_payload["diagnostics"]
+                key = "eval/video" if i == 0 else f"eval/video_{i+1}"
+                video_logs[key] = wandb.Video(video, fps=args.video_fps, format="mp4")
+                diag_key = "video_1" if i == 0 else f"video_{i+1}"
+                video_diagnostics[diag_key] = diag
+
+            highlight_saved = 0
+            highlight_attempts = 0
+            while highlight_saved < highlight_target and highlight_attempts < highlight_max_attempts:
+                seed_offset = seed_cursor
+                seed_cursor += 1
+                highlight_attempts += 1
+                scout_payload = rollout_video(
+                    spec=spec,
+                    policy=policy,
+                    args=args,
+                    llm_manager=llm_manager,
+                    seed_offset=seed_offset,
+                    record_video=False,
+                    max_steps_override=args.highlight_scout_max_steps,
+                )
+                if scout_payload is None:
+                    continue
+                scout_diag = scout_payload["diagnostics"]
+                matched, reason = _video_matches_highlight_criteria(scout_diag, args)
+                if not matched:
+                    continue
+                video_payload = rollout_video(
+                    spec=spec,
+                    policy=policy,
+                    args=args,
+                    llm_manager=llm_manager,
+                    seed_offset=seed_offset,
+                    record_video=True,
+                )
+                if video_payload is None:
+                    continue
+                video = video_payload["video"]
+                if video is None:
+                    continue
+                highlight_saved += 1
+                diag = dict(video_payload["diagnostics"])
+                diag["highlight_reason"] = reason
+                key = f"eval/highlight_video_{highlight_saved}"
+                video_logs[key] = wandb.Video(video, fps=args.video_fps, format="mp4")
+                diag_key = f"highlight_video_{highlight_saved}"
+                highlight_diagnostics[diag_key] = diag
+                video_diagnostics[diag_key] = diag
+
+            if video_logs:
+                wandb.log(video_logs)
+                run.summary["eval/video_count"] = len(video_logs)
+                run.summary["eval/video_count_regular"] = sum(
+                    1 for k in video_diagnostics.keys() if k.startswith("video_")
+                )
+                run.summary["eval/video_count_highlight"] = len(highlight_diagnostics)
+                run.summary["eval/video_diagnostics_json"] = json.dumps(video_diagnostics, sort_keys=True)
+                run.summary["eval/highlight_video_diagnostics_json"] = json.dumps(
+                    highlight_diagnostics, sort_keys=True
+                )
+                for name, diag in video_diagnostics.items():
+                    run.summary[f"eval/{name}_terminal_reason"] = str(diag.get("terminal_reason", "unknown"))
+                    if "highlight_reason" in diag:
+                        run.summary[f"eval/{name}_highlight_reason"] = str(diag["highlight_reason"])
+                    for k in (
+                        "terminal_done",
+                        "video_cap_reached",
+                        "episode_return",
+                        "episode_steps",
+                        "enter_dungeon_unlocked",
+                        "final_health",
+                        "final_food",
+                        "final_drink",
+                        "final_energy",
+                        "final_player_level",
+                        "final_discount",
+                    ):
+                        v = diag.get(k)
+                        if isinstance(v, (bool, int, float, np.integer, np.floating)):
+                            run.summary[f"eval/{name}_{k}"] = float(v) if not isinstance(v, bool) else bool(v)
+            run.summary["eval/highlight_video_target"] = int(highlight_target)
+            run.summary["eval/highlight_video_attempts"] = int(highlight_attempts)
+            run.summary["eval/highlight_return_threshold"] = float(args.highlight_return_threshold)
 
         # Explicit summary block requested by user.
         run.summary["model/training_summary_json"] = json.dumps(training_summary, sort_keys=True)

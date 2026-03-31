@@ -2,6 +2,7 @@
 
 #SBATCH --job-name=llm_worker
 #SBATCH --partition=rl
+#SBATCH --qos=rl_qos
 #SBATCH --array=1-30                   # Default, can be overridden with --array=1-N
 #SBATCH --output=/home/geney/Craftax_Baselines/logs/llm_worker_%A_%a.out
 #SBATCH --error=/home/geney/Craftax_Baselines/logs/llm_worker_%A_%a.err

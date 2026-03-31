@@ -1,0 +1,6 @@
+t,run_id,role,status,latency_s,prompt_chars,response_chars,prompt_tokens,completion_tokens,total_tokens,error,response_preview
+0,oracle_privileged,oracle,ok,16.983328,1770237,113,998736,27,999432,,Headline: Resource Gathering and Dungeon Crawling through Multiple Floors  Meaningful events (ordered): 1. [t+28]
+283,oracle_privileged,oracle,ok,17.741058,1751727,48,986933,21,987629,,t=2193:* They finally descend to Floor 2 (t=2193
+298,oracle_privileged,oracle,ok,19.842779,1746860,89,983888,22,984584,,"Headline: A long struggle for survival on Floor 1 ends in a descent to Floor 2, where the"
+2180,oracle_privileged,oracle,ok,6.758335,139084,138,77105,28,77801,,"Mining and Resource Gathering:* On Floor 2, the player focuses heavily on mining stone and coal. They find a sapphire and a second diamond"
+2195,oracle_privileged,oracle,ok,5.835488,124988,123,69279,28,69975,,Headline: Resource gathering and equipment upgrades on Floor 2 end in a fatal encounter.  Meaningful events (ordered): 1. [

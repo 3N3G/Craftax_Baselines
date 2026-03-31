@@ -14,7 +14,8 @@
 set -e
 
 source ~/.bashrc
-conda activate craftax_fast_llm
+VLLM_RL_TEST_ENV_PATH="${VLLM_RL_TEST_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax_fast_llm}"
+conda activate "${VLLM_RL_TEST_ENV_PATH}"
 
 mkdir -p logs
 cd ~/Craftax_Baselines

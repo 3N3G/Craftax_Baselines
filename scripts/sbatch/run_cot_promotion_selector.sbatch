@@ -13,11 +13,10 @@ source ~/.bashrc || true
 cd ~/Craftax_Baselines
 mkdir -p logs
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "ERROR: conda not found"
-    exit 1
-fi
-conda activate /data/user_data/geney/.conda/envs/craftax || conda activate craftax || true
+source scripts/sbatch/conda_env_setup.sh
+sbatch_require_conda
+COT_SELECTOR_ENV_PATH="${COT_SELECTOR_ENV_PATH:-/data/user_data/geney/.conda/envs/craftax}"
+sbatch_activate_conda_env "cot-promotion-selector" "${COT_SELECTOR_ENV_PATH}"
 
 MANIFEST="${1:?manifest path required}"
 TOP_K="${2:-2}"
