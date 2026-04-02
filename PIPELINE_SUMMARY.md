@@ -1,6 +1,6 @@
 # Imagination-Augmented Offline RL Pipeline — Full Summary
 
-**Status: PAUSED** (as of 2026-03-23, awaiting group design decisions)
+**Status: OFFLINE PIPELINE COMPLETE** (as of 2026-03-28; all 6 phases finished for 158 shards)
 
 ---
 
@@ -56,7 +56,7 @@ Train an offline RL agent (AWR) for Craftax that conditions on LLM "imagination"
 
 **raw_trajectories/ deleted** after verification (16GB freed)
 
-### Phase 4: Gemini Oracle Labelling — PAUSED (no labels saved)
+### Phase 4: Gemini Oracle Labelling — COMPLETED (158 shards)
 
 - **Script:** `pipeline/gemini_label.py`
 - **Model:** Gemini 2.5 Flash, temperature=0.3, max_output=512 tokens, thinking disabled
@@ -64,10 +64,10 @@ Train an offline RL agent (AWR) for Craftax that conditions on LLM "imagination"
 - **Concurrency:** 20 threads, token-bucket rate limiter at 500 req/min
 - **Resumable:** tracks completed `sample_idx` per JSONL file, skips on restart
 
-**Current config: `--max-files 158`** (quarter of 632 shards):
+**Config: `--max-files 158`** (quarter of 632 shards):
 - 158 files = **1,068,752 Gemini API calls**
 - Estimated cost: **~$1,454** (based on actual avg 7,694 prompt tokens + 344 completion tokens per call)
-- Estimated runtime: **~44.5 hours** at ~400 req/min (fits in one 48h SLURM run)
+- Estimated runtime: **~44.5 hours** at ~400 req/min
 
 **Prompt template** (`~/Craftax_Baselines/configs/future_imagination/templates/oracle_next15_prompt.txt`):
 
@@ -94,7 +94,7 @@ Predicted Next Action: <Action that led the player from t+0 to t+1>
 
 **Minor format difference vs Craftax_Baselines reports:** Pipeline omits `| abs_t=Y` from future state headers (relative offsets only). Functionally equivalent — Gemini doesn't need absolute timestamps.
 
-### Phase 5: Qwen3-8B Embedding — NOT STARTED
+### Phase 5: Qwen3-8B Embedding — COMPLETED
 
 - **Script:** `pipeline/embed.py`
 - **Model:** Qwen/Qwen3-8B
@@ -116,7 +116,7 @@ Predicted Next Action: <Action that led the player from t+0 to t+1>
 - Position finding uses regex patterns + tokenizer offset_mapping to map char positions to token indices
 - Missing sections get zero vectors (robust to variable Gemini output)
 
-### Phase 6: Merge — NOT STARTED
+### Phase 6: Merge — COMPLETED (126 files used for downstream training)
 
 - **Script:** `pipeline/merge.py`
 - **Logic:** For each trajectory file, loads filtered data + Gemini JSONL + embedding NPZ

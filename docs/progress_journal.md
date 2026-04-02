@@ -948,3 +948,125 @@ Evaluate value function on curated observation states to understand what the LLM
   - primary launcher: `scripts/sbatch/run_ppo_symbolic_policy.sbatch`
 - `scripts/sbatch/run_ppo_video.sbatch` now also defaults PPO logging to:
   - `unaugmented_craftax_ppo` (override via `WANDB_PROJECT` when needed)
+
+---
+
+## 2026-03-22 → 2026-03-23: Offline Pipeline Completed (Phases 2–6)
+
+### Summary
+Completed the full imagination-augmented offline RL pipeline in `/data/group_data/rl/geney/new_craftax_llm_labelled_results_shards/`.
+
+### Phase completion timeline
+| Phase | Job | Runtime | Output |
+|-------|-----|---------|--------|
+| Phase 2: PPO data collection | 6721647 | 7h52m | 12,207 raw trajectory files (200M steps, 128 envs) |
+| Phase 3: Filter & repack | 6723088 | 1h55m | 632 files, 63.7M samples, min return ≥ 20.0 |
+| Phase 4: Gemini oracle labelling | — | ~44h | 158 shards labelled (quarter of data), ~1M Gemini calls |
+| Phase 5: Qwen3-8B embedding | — | — | 4096-dim layer-30 embeddings for all labelled samples |
+| Phase 6: Merge | — | — | 126 final trajectory files with hidden states |
+
+### Prompt fix
+- Changed `oracle_next15_prompt.txt` to explicitly request "exactly 3" summary events instead of one-per-step (Gemini was listing 15 events). Updated `embed.py` event regex to handle range format `[t+X-t+Y]`. Stale labels deleted and regenerated.
+
+### Infrastructure
+- `raw_trajectories/` deleted after Phase 3 verification (16GB freed)
+- All SLURM scripts use `TMPDIR=/tmp` due to NFS home being 97% full
+
+---
+
+## 2026-03-28: AWR Model Size & Augmentation Ablation
+
+### Summary
+Trained 6 AWR models: augmented vs unaugmented × {w512, w1024, w2048}. Each trained for 100K steps on the same 126 merged offline trajectory files. Evaluated with 10 live episodes each.
+
+### Results
+
+| Model | Params | Avg Return (10 ep) | Std |
+|-------|--------|-------------------:|----:|
+| aug-w512 | 14.3M | 16.20 | 5.11 |
+| **unaug-w512** | 9.5M | **17.70** | 2.69 |
+| aug-w1024 | 31.7M | 14.50 | 4.72 |
+| **unaug-w1024** | 21.2M | **19.10** | 1.90 |
+| **aug-w2048** | 75.9M | **18.90** | 2.14 |
+| unaug-w2048 | 50.7M | 17.40 | 3.80 |
+
+### Key findings
+- Unaugmented outperforms augmented at small/medium scale (w512, w1024)
+- Augmentation helps only at w2048 (18.90 vs 17.40)
+- Best overall: unaug-w1024 (19.10), lowest variance (std=1.90)
+- High variance in augmented models suggests embedding branch is noisy
+
+### Files
+- Training code: `pipeline/train_awr.py` (`--no-augmentation`, `--layer-width`)
+- Eval code: `pipeline/eval_online.py` (augmented), `pipeline/eval_unaugmented.py` (unaugmented)
+- Full results doc: `EXPERIMENT_RESULTS.md`
+- Checkpoints: `/data/group_data/rl/geney/checkpoints/awr_{imagination,unaug_w512,aug_w1024,unaug_w1024,aug_w2048,unaug_w2048}/`
+
+---
+
+## 2026-03-28: Predict-State-Only AWR Experiment Submitted
+
+### Motivation
+Eliminate the oracle-vs-predict-state distribution mismatch by training on predict-state-only labels (same prompts used at both train and eval time).
+
+### Setup
+- Top 250 episodes from offline dataset (~227K steps, returns 13.2–17.1)
+- Gemini model: gemini-3.1-flash-lite-preview with `predict_state_only_prompt_concise.txt`
+- Embeddings: Qwen3-8B layer-30 mean-pooled
+- AWR grid: aug w512, w1024, w2048 (100K steps, batch 256)
+
+### Jobs
+- 6848442–6848448: full pipeline (select → gemini → embed → merge → 3× AWR training)
+- Experiment dir: `/data/group_data/rl/geney/predict_state_top250/`
+
+---
+
+## 2026-03-30: Embedding Ablation & Validation Experiments
+
+### Summary
+Comprehensive investigation into whether and how models use their embeddings. Full results in `EXPERIMENT_RESULTS_2.md`.
+
+### 1. Validation ablation (real/zero/shuffled hidden states on held-out data)
+
+**Oracle models: YES, they use embeddings.**
+- Oracle w512: 41.93% (real) vs 36.96% (zero) vs 32.65% (shuffled) → **+4.97pp real-zero gap**
+- Oracle w2048: 40.91% (real) vs 35.70% (zero) vs 31.44% (shuffled) → **+5.21pp gap**
+- Wrong oracle embeddings (shuffled) worse than no embeddings → model actively relies on content
+
+**PSF models: NO, they ignore embeddings.**
+- All three conditions within noise (<0.3pp). PSF labels carry insufficient signal.
+
+**Unaugmented models ≈ PSF models** (~38.5% accuracy). Extra hidden-state params contribute nothing.
+
+### 2. Cross-distribution test
+- Fed PSF embeddings to oracle w512 model: **36.32%** — **worse than zero (36.96%)**
+- Proves PSF embeddings are OOD for oracle model and actively harmful
+
+### 3. Online embedding ablation (100 episodes × 5 conditions)
+- Tested Gemini, constant string, random gibberish, adversarial futures, death-seeking futures
+- On oracle w512, oracle w2048, PSF w2048, unaugmented w2048
+- **Result:** Embedding content has zero effect on online returns — all conditions overlap within noise
+- **Unaugmented w2048 (17.66) beats all augmented models online**
+- Root cause: distribution mismatch. Oracle model learned oracle embeddings; at eval time everything is OOD
+
+### 4. Weighted BC+AWR with oracle demonstrations
+- 25% oracle trajectories upweighted 5× + 75% normal AWR
+- **Collapsed: 5.05 return** (vs 17.66 unaugmented)
+- Model memorized oracle actions (entropy 0.06), classic BC distribution shift failure
+
+---
+
+## 2026-03-31: Key Takeaways & Project Status
+
+### Conclusions
+1. **Architecture works** — oracle training proves 5pp dependency on hidden state embeddings
+2. **Predict-state labels uninformative** — PSF models ignore embeddings entirely
+3. **Distribution mismatch kills gains at eval** — oracle model can't use any eval-time embedding source
+4. **Augmentation branch is net negative at inference** — adds OOD noise; unaugmented wins
+5. **BC with oracle demos doesn't work** — too narrow, catastrophic overfitting
+
+### Open directions
+- Better eval-time embeddings (learned world model? better prompts? chain-of-thought strategy reasoning?)
+- Bridge distribution gap (train on embeddings closer to eval-time distribution)
+- Abandon augmentation and focus on obs-only architectures
+- Online augmented RL (live Gemini calls during PPO — job 6816399 was attempted but paused)
